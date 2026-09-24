@@ -1,0 +1,2408 @@
+
+❯ <ide_opened_file>The user opened the file /Users/ashishsahu/Documents/SDE-Int
+  erview-Preparation-2026/hrclabs/hrclabsrag/problem.txt in the IDE. This may
+  or may not be related to the current task.</ide_opened_file>
+
+❯ I have added the problem statement in problem file. Let's work on finalising
+  the requirements and create a plan for building the app.
+
+  Read 1 file, listed 1 directory (ctrl+o to expand)
+
+⏺ The problem is open-ended, so a few choices will shape the whole plan. I'll
+  settle these first, then write up the requirements and build plan.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which language/stack should the app be built in? → Python + FastAPI
+     (Recommended)
+     · Which LLM / embedding provider should it use? → Claude + local embeddings
+     (Recommended)
+     · How should 'creates a RAG application' over the documents work? → Single
+     session corpus
+     · Which document formats must be supported? → PDF, TXT / Markdown
+
+⏺ Here's the proposed plan, based on your answers. Anything I've had to assume
+  is marked as such.
+
+  Requirements (final draft)
+
+  Functional
+  1. Upload documents at runtime: PDF, TXT and MD files, several at a time,
+     through the web UI or the REST API.
+  2. Build the index automatically: each upload is parsed, split into chunks,
+     embedded and added to the active corpus. No restart or code change is
+     needed.
+  3. Ask questions and get grounded answers:
+     - Claude answers only from the retrieved passages.
+     - It cites its sources inline, as [1], [2] with the file name and page
+       number.
+     - If the documents don't contain the answer, it says so instead of
+       guessing.
+  4. Use one corpus per session: there's a single active document set (assumed
+     to be one per server instance, not one per browser). You can list the files
+     in it, add more, or reset it to start over with a different set.
+  5. Stream answers into the UI as they're generated.
+
+  Non-functional
+  - The API key and settings live in .env: model, chunk size, top-k.
+  - Embeddings run locally, so the only external dependency is the Anthropic
+    API.
+  - The corpus is saved to disk, so it survives a server restart.
+  - There are clear errors for unsupported files, empty or scanned PDFs with no
+    text, and a missing API key.
+
+  Out of scope: OCR for scanned PDFs, user accounts and login, multiple named
+  knowledge bases, URL ingestion, DOCX.
+
+  Architecture
+
+  Browser (static HTML/JS)
+     │  upload / ask / reset
+  FastAPI ──► Ingestion: parse (pypdf / text) → chunk (~800 chars, 150 overlap,
+  keeps page no.)
+     │                     → embed (sentence-transformers bge-small-en-v1.5) →
+  ChromaDB (local, persistent)
+     └────► Query: embed question → top-k=5 retrieval → prompt with numbered
+  context
+                       → Claude (streamed over SSE) → answer + citation list
+
+  ┌────────────┬────────────────────────────────┬──────────────────────────┐
+  │  Concern   │             Choice             │           Why            │
+  ├────────────┼────────────────────────────────┼──────────────────────────┤
+  │            │                                │ Async, streaming         │
+  │ API        │ FastAPI + Uvicorn              │ support, auto-generated  │
+  │            │                                │ OpenAPI docs             │
+  ├────────────┼────────────────────────────────┼──────────────────────────┤
+  │ Vector     │                                │ No server to run, saved  │
+  │ store      │ ChromaDB (embedded)            │ to disk, supports        │
+  │            │                                │ metadata filters         │
+  ├────────────┼────────────────────────────────┼──────────────────────────┤
+  │            │                                │ Small (~130MB), good     │
+  │ Embeddings │ BAAI/bge-small-en-v1.5         │ retrieval quality, runs  │
+  │            │                                │ on CPU                   │
+  ├────────────┼────────────────────────────────┼──────────────────────────┤
+  │            │ Claude, claude-sonnet-5 by     │ Strong at grounded       │
+  │ LLM        │ default, can be changed in     │ answers and following    │
+  │            │ config                         │ citation instructions    │
+  ├────────────┼────────────────────────────────┼──────────────────────────┤
+  │ UI         │ One static page served by      │ No separate frontend     │
+  │            │ FastAPI                        │ build step               │
+  └────────────┴────────────────────────────────┴──────────────────────────┘
+
+  API endpoints: POST /api/documents (multipart upload), GET /api/documents,
+  DELETE /api/documents (reset), POST /api/query (SSE stream), GET /api/health.
+
+  Project layout
+
+  app/
+    main.py          # FastAPI app, routes, static mount
+    config.py        # pydantic-settings from .env
+    ingestion/       # loaders.py (pdf/txt/md), chunker.py
+    store.py         # embeddings + Chroma wrapper
+    rag.py           # retrieval, prompt building, Claude streaming
+    static/index.html
+  tests/             # chunker, loaders, retrieval, API (LLM mocked)
+  sample_docs/       # 2 small, unrelated doc sets for demoing corpus swap
+  .env.example, requirements.txt, README.md
+
+  Build plan (milestones)
+
+  1. Scaffold: config, health endpoint, dependencies, .env.example.
+  2. Ingestion: loaders and a chunker that keeps page metadata, with unit tests.
+  3. Vector store: embed and upsert chunks, list documents, reset, retrieve;
+     tests.
+  4. RAG query: grounded prompt, citation format, "not found" behaviour, SSE
+     streaming; API tests with Claude mocked.
+  5. UI: upload area, file list, reset button, chat with streamed answers and
+     clickable citations.
+  6. End-to-end check: run against the two sample document sets, confirm answers
+     are grounded and swapping sets works, and confirm off-topic questions get
+     a "don't know".
+  7. README: setup, run, API usage, design decisions, limitations. Optionally a
+     Dockerfile.
+  8. Submission: commit, then export this transcript with /export into the repo
+     (for example transcripts/).
+
+  Two small decisions are left for you to confirm or change:
+  - Default model: I've picked claude-sonnet-5 for answer quality.
+    claude-haiku-4-5 would be cheaper and faster.
+  - Plan file: should I save this plan as PLAN.md in the repo? Graders may
+    appreciate seeing it.
+
+  If this looks right, I'll start on milestone 1.
+
+❯ let's use claude-sonnet-5 but make it configurable.
+  Let's create a plan.md with the initial plan.
+
+⏺ Write(plan.md)
+  ⎿  Wrote 90 lines to plan.md
+      1 # RAG Generator — Plan
+      2
+      3 ## Problem
+      4
+      5 Build a RAG generator that:
+      6 - accepts documents at runtime,
+      7 - creates a RAG application over those documents,
+      8 - lets users ask questions and receive grounded answers,
+      9 - works with different document sets without code changes.
+     … +107 lines (ctrl+o to expand)
+
+⏺ Written for: whoever reviews the repo, as well as you.
+
+  I've created plan.md with the requirements, architecture, API, project layout
+  and milestones. It sets the model to claude-sonnet-5 by default, and you can
+  change it with the LLM_MODEL variable in .env.
+
+  I haven't committed it yet. Should I commit it and start on milestone 1 (the
+  scaffold)?
+
+❯ Yes
+  let's define the contraints and scope for this problem.
+  Current Scope:
+  1. Syn document ingestion - a cap on accepted doc size.
+  2. Docs supported - pdf, txt
+  3. Chat per document set per session
+
+  Future enhancements:
+  1. Knolwedge base where user can maintain their documents
+  2. Asyncronous document ingestion using message queues/task queues
+  3. More document types supported such as HTML, docs
+  4. knowledge selection option while chatting
+
+⏺ Write(plan.md)
+  ⎿  Added 75 lines, removed 37 lines
+      15  | Stack | Python + FastAPI |
+      16  | LLM | Claude, default `claude-sonnet-5`, configurable via `LL
+          M_MODEL` env var |
+      17  | Embeddings | Local `sentence-transformers` model (`BAAI/bge-s
+          mall-en-v1.5`), no extra API key |
+      18 -| Vector store | ChromaDB (embedded, persisted to disk) |      
+      19 -| Corpus model | Single session corpus — one active document se
+         -t per server instance; add files or reset to switch sets |     
+      20 -| Formats | PDF, TXT, Markdown |                               
+      18 +| Vector store | ChromaDB (embedded, persisted to disk), one co
+         +llection per session |                                         
+      19 +| Ingestion | Synchronous, within the upload request, bounded b
+         +y size limits |                                                
+      20 +| Corpus model | One document set and one chat per session |   
+      21 +| Formats | PDF, TXT |                                         
+      22  | UI | Single static HTML/JS page served by FastAPI |
+      23  
+      24 +## Scope                                                       
+      25 +                                                               
+      26 +### Current scope                                              
+      27 +1. **Synchronous document ingestion with size caps** — an uploa
+         +d is parsed, chunked, embedded and indexed before the request r
+         +eturns. Limits keep request time bounded (see [Constraints](#co
+         +nstraints)).                                                   
+      28 +2. **Supported formats** — PDF (text-based) and TXT.           
+      29 +3. **Chat per document set per session** — each session owns it
+         +s own document set and its own chat. Sessions are isolated: que
+         +stions in one session never retrieve documents from another.   
+      30 +                                                               
+      31 +### Future enhancements                                        
+      32 +1. **Knowledge bases** — users create and maintain named, long-
+         +lived document collections.                                    
+      33 +2. **Asynchronous ingestion** — uploads enqueue a job on a mess
+         +age/task queue (e.g. Celery/RQ + Redis); workers index in the b
+         +ackground and the UI polls or subscribes for status. Removes th
+         +e need for tight size caps.                                    
+      34 +3. **More document types** — HTML, DOCX, and others via pluggab
+         +le loaders.                                                    
+      35 +4. **Knowledge base selection in chat** — pick one or more know
+         +ledge bases to query from within a chat.                       
+      36 +                                                               
+      37 +### Out of scope                                               
+      38 +OCR for scanned PDFs, authentication/user accounts, URL ingesti
+         +on.                                                            
+      39 +                                                               
+      40 +## Constraints                                                 
+      41 +                                                               
+      42 +All limits are configurable via `.env`; defaults below.        
+      43 +                                                               
+      44 +| Constraint | Default | Rationale |                           
+      45 +|---|---|---|                                                  
+      46 +| Max file size | 10 MB (`MAX_FILE_SIZE_MB`) | Bounds synchrono
+         +us ingestion time and memory |                                 
+      47 +| Max PDF pages per file | 200 (`MAX_PDF_PAGES`) | File size al
+         +one does not bound text volume; keeps embedding time within a r
+         +equest |                                                       
+      48 +| Max files per upload request | 5 (`MAX_FILES_PER_UPLOAD`) | B
+         +ounds total work per request |                                 
+      49 +| Max documents per session | 20 (`MAX_DOCS_PER_SESSION`) | Kee
+         +ps per-session index small and retrieval fast |                
+      50 +| Accepted types | `.pdf`, `.txt` | Checked by extension and co
+         +ntent (PDF magic bytes / UTF-8 decodability) |                 
+      51 +| TXT encoding | UTF-8, fallback latin-1 | Avoids rejecting com
+         +mon non-UTF-8 files |                                          
+      52 +| Session lifetime | Expires after 24 h idle (`SESSION_TTL_HOUR
+         +S`) | Expired sessions and their collections are purged at star
+         +tup and periodically |                                         
+      53 +| Chat history | Last 6 turns sent by the client with each ques
+         +tion | Supports follow-up questions while keeping the server st
+         +ateless for chat |                                             
+      54 +| Retrieval | top-k = 5 (`TOP_K`), chunk ~800 chars / 150 overl
+         +ap | Fits comfortably in the prompt; tunable |                 
+      55 +                                                               
+      56 +Rejections return a clear 4xx error: oversized file, too many p
+         +ages/files, unsupported type, PDF with no extractable text, ses
+         +sion document limit reached, unknown/expired session.          
+      57 +                                                               
+      58  ## Requirements
+      59  
+      60  ### Functional
+      26 -1. **Runtime upload** — upload one or more PDF/TXT/MD files via
+         - web UI or REST API.                                           
+      27 -2. **Automatic indexing** — each upload is parsed, chunked, emb
+         -edded and added to the active corpus; no restart or code change
+         -.                                                              
+      28 -3. **Grounded Q&A** — answers are generated only from retrieved
+         - passages, with inline citations (`[1]`, `[2]`) mapped to file 
+         -name and page. If the answer is not in the documents, the model
+         - says so rather than guessing.                                 
+      29 -4. **Corpus management** — list indexed documents, add more, or
+         - reset the corpus to start over with a different document set. 
+      30 -5. **Streaming** — answers stream to the UI as they are generat
+         -ed.                                                            
+      61 +1. **Sessions** — the UI creates a session on load; the session
+         + id is kept in the browser so a refresh resumes it. A "New sess
+         +ion" action starts over with an empty document set and chat.   
+      62 +2. **Runtime upload** — upload PDF/TXT files into the current s
+         +ession via the web UI or REST API, within the constraints above
+         +.                                                              
+      63 +3. **Automatic indexing** — each accepted upload is indexed int
+         +o the session's collection; no restart or code change.         
+      64 +4. **Grounded Q&A** — answers are generated only from passages 
+         +retrieved from the session's documents, with inline citations (
+         +`[1]`, `[2]`) mapped to file name and page. If the answer is no
+         +t in the documents, the model says so rather than guessing.    
+      65 +5. **Document list** — view the documents indexed in the curren
+         +t session.                                                     
+      66 +6. **Streaming** — answers stream to the UI as they are generat
+         +ed.                                                            
+      67  
+      68  ### Non-functional
+      33 -- Configuration via `.env`: `ANTHROPIC_API_KEY`, `LLM_MODEL`, c
+         -hunk size/overlap, top-k.                                      
+      69 +- Configuration via `.env`: `ANTHROPIC_API_KEY`, `LLM_MODEL`, l
+         +imits, chunking, top-k.                                        
+      70  - Only external dependency at runtime is the Anthropic API.
+      35 -- Corpus persists across server restarts.                      
+      36 -- Clear errors for unsupported file types, PDFs with no extract
+         -able text, and a missing API key.                              
+      71 +- Session documents persist across server restarts until the se
+         +ssion expires.                                                 
+      72 +- Clear error when the API key is missing.                     
+      73  
+      38 -### Out of scope                                               
+      39 -OCR for scanned PDFs, authentication, multiple named knowledge 
+         -bases, URL ingestion, DOCX.                                    
+      40 -                                                               
+      74  ## Architecture
+      75  
+      76  ```
+      44 -Browser (static HTML/JS)                                       
+      45 -   │  upload / ask / reset                                     
+      46 -FastAPI ──► Ingestion: parse (pypdf / text) → chunk (~800 chars
+         -, 150 overlap, keeps page no.)                                 
+      47 -   │                     → embed (bge-small-en-v1.5) → ChromaDB
+         - (local, persistent)                                           
+      48 -   └────► Query: embed question → top-k=5 retrieval → prompt wi
+         -th numbered context                                            
+      49 -                     → Claude (streamed via SSE) → answer + cit
+         -ation list                                                     
+      77 +Browser (static HTML/JS, holds session id + chat history)      
+      78 +   │  create session / upload / ask                            
+      79 +FastAPI ──► Ingestion (sync): validate limits → parse (pypdf / 
+         +text) → chunk (keeps page no.)                                 
+      80 +   │                            → embed (bge-small-en-v1.5) → C
+         +hromaDB collection "session_<id>"                              
+      81 +   └────► Query: embed question → top-k retrieval from session 
+         +collection                                                     
+      82 +                   → prompt (numbered context + recent history)
+         + → Claude (streamed via SSE)                                   
+      83 +                   → answer + citation list                    
+      84  ```
+      85  
+      86  ### API
+      87  
+      88  | Method | Path | Purpose |
+      89  |---|---|---|
+      56 -| `POST` | `/api/documents` | Upload files (multipart) and inde
+         -x them |                                                       
+      57 -| `GET` | `/api/documents` | List indexed documents |          
+      58 -| `DELETE` | `/api/documents` | Reset the corpus |             
+      59 -| `POST` | `/api/query` | Ask a question; streams answer + cita
+         -tions (SSE) |                                                  
+      90 +| `POST` | `/api/sessions` | Create a session; returns `session
+         +_id` |                                                         
+      91 +| `DELETE` | `/api/sessions/{id}` | Delete a session and its do
+         +cuments |                                                      
+      92 +| `POST` | `/api/sessions/{id}/documents` | Upload files (multi
+         +part) and index them synchronously |                           
+      93 +| `GET` | `/api/sessions/{id}/documents` | List indexed documen
+         +ts |                                                           
+      94 +| `POST` | `/api/sessions/{id}/query` | Ask a question (+ recen
+         +t history); streams answer + citations (SSE) |                 
+      95  | `GET` | `/api/health` | Health / config check |
+      96  
+      97  ## Project layout
+     ...
+       99  ```
+      100  app/
+      101    main.py            # FastAPI app, routes, static mount
+       67 -  config.py          # pydantic-settings loaded from .env     
+      102 +  config.py          # pydantic-settings loaded from .env (mod
+          +el, limits, chunking)                                         
+      103 +  sessions.py        # session create/lookup/expiry           
+      104    ingestion/
+       69 -    loaders.py       # PDF / TXT / MD parsing                 
+      105 +    validation.py    # size / type / page / count limits      
+      106 +    loaders.py       # PDF / TXT parsing                      
+      107      chunker.py       # chunking with page metadata
+       71 -  store.py           # embeddings + Chroma wrapper            
+      108 +  store.py           # embeddings + Chroma wrapper (collection
+          + per session)                                                 
+      109    rag.py             # retrieval, prompt building, Claude stre
+           aming
+      110    static/index.html  # UI
+       74 -tests/               # chunker, loaders, retrieval, API (LLM m
+          -ocked)                                                        
+       75 -sample_docs/         # two unrelated document sets for demoing
+          - corpus swap                                                  
+      111 +tests/               # validation, loaders, chunker, retrieval
+          +, sessions, API (LLM mocked)                                  
+      112 +sample_docs/         # two unrelated document sets for demoing
+          + isolation between sessions                                   
+      113  .env.example
+      114  requirements.txt
+      115  README.md
+     ...
+      117  
+      118  ## Milestones
+      119  
+       83 -1. **Scaffold** — config, health endpoint, dependencies, `.env
+          -.example`.                                                    
+       84 -2. **Ingestion** — loaders and chunker preserving page metadat
+          -a; unit tests.                                                
+       85 -3. **Vector store** — embed/upsert, list, reset, retrieve; tes
+          -ts.                                                           
+       86 -4. **RAG query** — grounded prompt, citation format, "not foun
+          -d" behaviour, SSE streaming; API tests with the LLM mocked.   
+       87 -5. **UI** — upload area, document list, reset button, chat wit
+          -h streamed answers and citations.                             
+       88 -6. **End-to-end check** — run against both sample document set
+          -s; confirm grounded answers, corpus swap, and "don't know" on 
+          -off-topic questions.                                          
+       89 -7. **README** — setup, run, API usage, design decisions, limit
+          -ations; optional Dockerfile.                                  
+       90 -8. **Submission** — commit code and export AI agent transcript
+          -s (`/export`) into `transcripts/`.                            
+      120 +1. **Scaffold** — config (incl. limits), health endpoint, depe
+          +ndencies, `.env.example`.                                     
+      121 +2. **Sessions** — create/delete/lookup, expiry purge; tests.  
+      122 +3. **Ingestion** — validation, loaders, chunker preserving pag
+          +e metadata; tests for each limit.                             
+      123 +4. **Vector store** — per-session collections: embed/upsert, l
+          +ist, delete, retrieve; tests incl. session isolation.         
+      124 +5. **RAG query** — grounded prompt, citations, "not found" beh
+          +aviour, history, SSE streaming; API tests with the LLM mocked.
+      125 +6. **UI** — session handling, upload with limit errors, docume
+          +nt list, chat with streamed answers and citations.            
+      126 +7. **End-to-end check** — two sessions with the two sample doc
+          +ument sets; confirm grounded answers, isolation, limit rejecti
+          +ons, and "don't know" on off-topic questions.                 
+      127 +8. **README** — setup, run, API usage, design decisions, const
+          +raints, future enhancements; optional Dockerfile.             
+      128 +9. **Submission** — commit code and export AI agent transcript
+          +s (`/export`) into `transcripts/`.                            
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I've updated plan.md with your scope and committed it along with problem.txt
+  (f77db6f).
+
+  Changes to the plan:
+  - Scope: the plan now has sections for current scope, future enhancements and
+    out of scope. Current scope and future enhancements are as you listed them.
+    Markdown is no longer supported; it's PDF and TXT only.
+  - Sessions: each session has its own Chroma collection, so sessions can't see
+    each other's documents. The API now puts everything under a session, for
+    example /api/sessions/{id}/documents. The browser stores the session ID so a
+    page refresh resumes the same session. There's also a "New session" action
+    to start over.
+  - Constraints table: I picked these default limits, and each one can be
+    changed in .env:
+
+  | Limit                                | Default
+                              |
+  |--------------------------------------|--------------------------------------
+  -----------------------------|
+  | Max file size                        | 10 MB
+                              |
+  | Max pages per PDF                    | 200
+                              |
+  | Max files per upload                 | 5
+                              |
+  | Max documents per session            | 20
+                              |
+  | Session expiry                       | after 24 hours idle
+                              |
+  | Chat history sent with each question | last 6 turns (kept by the browser;
+  the server doesn't store chat) |
+    File size alone doesn't limit how much text a PDF holds, so the page cap is
+    what actually keeps upload time reasonable while ingestion is synchronous.
+  - Milestones: there are now 9. I added "Sessions" as milestone 2, and the
+    tests now check each limit and that sessions stay isolated.
+
+  Change any of these limits if you like. Otherwise I'll start milestone 1, the
+  scaffold.
+
+❯ <ide_opened_file>The user opened the file /Users/ashishsahu/Documents/SDE-Int
+  erview-Preparation-2026/hrclabs/hrclabsrag/plan.md in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+❯ Go ahead
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ Only Python 3.9 is installed. I'll create a virtual environment and check
+  whether the dependencies install on 3.9 before writing any code.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All the dependencies install fine on Python 3.9, so I'll write the code to be
+  3.9-compatible and won't ask you to install a newer Python. Now the scaffold:
+
+⏺ Write(requirements.txt)
+  ⎿  Wrote 12 lines to requirements.txt
+       1 fastapi>=0.115,<1.0
+       2 uvicorn[standard]>=0.30
+       3 pydantic-settings>=2.4
+       4 python-multipart>=0.0.9
+       5 anthropic>=0.40
+       6 chromadb>=1.0
+       7 sentence-transformers>=3.0
+       8 pypdf>=5.0
+       9
+      10 # dev / test
+     … +2 lines (ctrl+o to expand)
+
+⏺ Write(.env.example)
+  ⎿  Wrote 23 lines to .env.example
+       1 # --- LLM ---
+       2 ANTHROPIC_API_KEY=
+       3 LLM_MODEL=claude-sonnet-5
+       4 LLM_MAX_TOKENS=1024
+       5
+       6 # --- Embeddings / storage ---
+       7 EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+       8 DATA_DIR=./data
+       9
+      10 # --- Ingestion limits ---
+     … +13 lines (ctrl+o to expand)
+
+⏺ Write(.gitignore)
+  ⎿  Wrote 7 lines to .gitignore
+      1 .venv/
+      2 __pycache__/
+      3 *.pyc
+      4 .pytest_cache/
+      5 .env
+      6 data/
+      7 .DS_Store
+
+⏺ Write(app/__init__.py)
+  ⎿  Wrote 1 line to app/__init__.py
+      1 (No content)
+
+⏺ Write(app/config.py)
+  ⎿  Wrote 54 lines to app/config.py
+       1 """Application settings, loaded from environment variables / .en
+         v."""
+       2
+       3 from functools import lru_cache
+       4 from pathlib import Path
+       6 from pydantic import Field, model_validator
+       7 from pydantic_settings import BaseSettings, SettingsConfigDict
+       8
+       9
+      10 class Settings(BaseSettings):
+     … +47 lines (ctrl+o to expand)
+
+⏺ Write(app/main.py)
+  ⎿  Wrote 40 lines to app/main.py
+      1 """FastAPI application entry point."""
+      2
+      3 from pathlib import Path
+      4 from typing import Optional
+      5
+      6 from fastapi import FastAPI
+      7 from fastapi.staticfiles import StaticFiles
+      8
+      9 from app.config import Settings, get_settings
+     … +33 lines (ctrl+o to expand)
+
+⏺ Write(app/static/index.html)
+  ⎿  Wrote 10 lines to app/static/index.html
+       1 <!doctype html>
+       2 <html lang="en">
+       3 <head>
+       4   <meta charset="utf-8">
+       5   <title>RAG Generator</title>
+       7 <body>
+       8   <p>RAG Generator — UI coming in milestone 6. See <a href="/doc
+         s">/docs</a> for the API.</p>
+       9 </body>
+      10 </html>
+     … +1 line (ctrl+o to expand)
+
+⏺ Write(tests/__init__.py)
+  ⎿  Wrote 1 line to tests/__init__.py
+      1 (No content)
+⏺ Write(tests/test_health.py)
+  ⎿  Wrote 42 lines to tests/test_health.py
+       1 import pytest
+       2 from fastapi.testclient import TestClient
+       3 from pydantic import ValidationError
+       4
+       5 from app.config import Settings
+       6 from app.main import create_app
+       7
+       8
+       9 def make_client(**overrides) -> TestClient:
+      10     settings = Settings(_env_file=None, **overrides)
+     … +34 lines (ctrl+o to expand)
+
+⏺ I left a clumsy line in one test; fixing it before running:
+
+⏺ Update(tests/test_health.py)
+  ⎿  Added 1 line, removed 1 line
+      23  
+      24  
+      25  def test_health_flags_missing_api_key():
+      26 -    body = make_client(anthropic_api_key="").json() if False el
+         -se make_client(anthropic_api_key="").get("/api/health").json() 
+      26 +    body = make_client(anthropic_api_key="").get("/api/health")
+         +.json()                                                        
+      27      assert body["llm_configured"] is False
+      28  
+      29  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Tests pass. Now a quick check that the server actually starts:
+
+  Ran 2 shell commands, wrote 2 memories (ctrl+o to expand)
+
+⏺ Milestone 1 is finished and committed (e10944e). All 5 tests pass, and the
+  server starts and answers health checks.
+
+  What was added:
+  - app/config.py loads every setting from .env: the model (default
+    claude-sonnet-5), each limit from the constraints table, chunking and top-k.
+    It refuses to start if the chunk overlap isn't smaller than the chunk size.
+  - app/main.py sets up the web server and the GET /api/health endpoint. The
+    endpoint shows the active model, whether an API key is set (without showing
+    the key itself), and the limits, so the UI can display them later.
+  - A placeholder UI at /. The real UI comes in milestone 6.
+  - requirements.txt, .env.example and a .gitignore that excludes .env, data/
+    and .venv/.
+  - tests/test_health.py, with 5 tests.
+
+  Only Python 3.9.6 is installed on your machine. All the dependencies install
+  and run fine on it, so I'm keeping the code 3.9-compatible rather than asking
+  you to install a newer Python.
+
+  To prepare for milestone 5, copy .env.example to .env and add your
+  ANTHROPIC_API_KEY. Milestones 2–4 (sessions, ingestion, vector store) don't
+  need the key.
+
+  Should I continue with milestone 2, sessions?
+
+❯ yes
+
+⏺ Write(app/sessions.py)
+  ⎿  Wrote 111 lines to app/sessions.py
+       1 """Session registry backed by SQLite, so sessions survive server
+          restarts.
+       3 A session is the unit of isolation: it owns one document set and
+          one chat.
+       4 Sessions expire after `ttl` of inactivity; every successful look
+       5 the activity timestamp.
+       6 """
+       7
+       9 import threading
+      10 import time
+     … +119 lines (ctrl+o to expand)
+
+⏺ Now I'll add the routes and the expiry cleanup that runs at startup and on a
+  timer:
+
+⏺ Write(app/main.py)
+  ⎿  Added 66 lines, removed 3 lines
+       1  """FastAPI application entry point."""
+       2  
+       3 +import asyncio                                                 
+       4 +import contextlib                                              
+       5 +import logging                                                 
+       6  from pathlib import Path
+       4 -from typing import Optional                                    
+       7 +from typing import List, Optional                              
+       8  
+       6 -from fastapi import FastAPI                                    
+       9 +from fastapi import Depends, FastAPI, HTTPException, Request, R
+         +esponse, status                                                
+      10  from fastapi.staticfiles import StaticFiles
+      11  
+      12  from app.config import Settings, get_settings
+      13 +from app.sessions import Session, SessionStore                 
+      14  
+      15 +logger = logging.getLogger(__name__)                           
+      16 +                                                               
+      17  STATIC_DIR = Path(__file__).parent / "static"
+      18 +PURGE_INTERVAL_SECONDS = 3600                                  
+      19  
+      20  
+      21  def create_app(settings: Optional[Settings] = None) -> FastAPI:
+      22      settings = settings or get_settings()
+      16 -    app = FastAPI(title="RAG Generator", version="0.1.0")      
+      23 +    sessions = SessionStore(                                   
+      24 +        settings.data_dir / "sessions.db", ttl_seconds=settings
+         +.session_ttl_hours * 3600                                      
+      25 +    )                                                          
+      26 +                                                               
+      27 +    def remove_session_data(session_id: str) -> None:          
+      28 +        """Delete everything a session owns besides its registr
+         +y row (documents, vectors)."""                                 
+      29 +        # Wired to the vector store in milestone 4.            
+      30 +                                                               
+      31 +    def purge_expired_sessions() -> List[str]:                 
+      32 +        expired = sessions.purge_expired()                     
+      33 +        for session_id in expired:                             
+      34 +            remove_session_data(session_id)                    
+      35 +        if expired:                                            
+      36 +            logger.info("Purged %d expired session(s)", len(exp
+         +ired))                                                         
+      37 +        return expired                                         
+      38 +                                                               
+      39 +    async def purge_periodically() -> None:                    
+      40 +        interval = min(PURGE_INTERVAL_SECONDS, sessions.ttl_sec
+         +onds)                                                          
+      41 +        while True:                                            
+      42 +            await asyncio.sleep(interval)                      
+      43 +            await asyncio.to_thread(purge_expired_sessions)    
+      44 +                                                               
+      45 +    @contextlib.asynccontextmanager                            
+      46 +    async def lifespan(_: FastAPI):                            
+      47 +        purge_expired_sessions()                               
+      48 +        task = asyncio.create_task(purge_periodically())       
+      49 +        try:                                                   
+      50 +            yield                                              
+      51 +        finally:                                               
+      52 +            task.cancel()                                      
+      53 +            sessions.close()                                   
+      54 +                                                               
+      55 +    app = FastAPI(title="RAG Generator", version="0.1.0", lifes
+         +pan=lifespan)                                                  
+      56      app.state.settings = settings
+      57 +    app.state.sessions = sessions                              
+      58 +    app.state.purge_expired_sessions = purge_expired_sessions  
+      59  
+      60 +    def current_session(session_id: str) -> Session:           
+      61 +        session = sessions.get(session_id)                     
+      62 +        if session is None:                                    
+      63 +            raise HTTPException(status.HTTP_404_NOT_FOUND, "Ses
+         +sion not found or expired")                                    
+      64 +        return session                                         
+      65 +                                                               
+      66      @app.get("/api/health")
+      67      def health() -> dict:
+      68          return {
+     ...
+       75                  "max_pdf_pages": settings.max_pdf_pages,
+       76                  "max_files_per_upload": settings.max_files_per
+           _upload,
+       77                  "max_docs_per_session": settings.max_docs_per_
+           session,
+       78 +                "session_ttl_hours": settings.session_ttl_hour
+          +s,                                                            
+       79                  "accepted_types": [".pdf", ".txt"],
+       80              },
+       81          }
+       82  
+       83 +    @app.post("/api/sessions", status_code=status.HTTP_201_CRE
+          +ATED)                                                         
+       84 +    def create_session() -> dict:                             
+       85 +        return sessions.create().to_dict(sessions.ttl_seconds)
+       86 +                                                              
+       87 +    @app.get("/api/sessions/{session_id}")                    
+       88 +    def get_session(session: Session = Depends(current_session
+          +)) -> dict:                                                   
+       89 +        return session.to_dict(sessions.ttl_seconds)          
+       90 +                                                              
+       91 +    @app.delete("/api/sessions/{session_id}", status_code=stat
+          +us.HTTP_204_NO_CONTENT)                                       
+       92 +    def delete_session(session_id: str) -> Response:          
+       93 +        if not sessions.delete(session_id):                   
+       94 +            raise HTTPException(status.HTTP_404_NOT_FOUND, "Se
+          +ssion not found or expired")                                  
+       95 +        remove_session_data(session_id)                       
+       96 +        return Response(status_code=status.HTTP_204_NO_CONTENT
+          +)                                                             
+       97 +                                                              
+       98      # Mounted last so /api routes take precedence.
+       99      app.mount("/", StaticFiles(directory=STATIC_DIR, html=True
+           ), name="static")
+      100      return app
+
+⏺ Write(tests/conftest.py)
+  ⎿  Wrote 29 lines to tests/conftest.py
+       1 import pytest
+       2 from fastapi.testclient import TestClient
+       3
+       4 from app.config import Settings
+       5 from app.main import create_app
+       6
+       7
+       8 @pytest.fixture
+       9 def make_settings(tmp_path):
+      10     def _make(**overrides) -> Settings:
+     … +20 lines (ctrl+o to expand)
+
+⏺ Write(tests/test_health.py)
+  ⎿  Added 3 lines, removed 10 lines
+       1  import pytest
+       2 -from fastapi.testclient import TestClient                      
+       2  from pydantic import ValidationError
+       3  
+       4  from app.config import Settings
+       6 -from app.main import create_app                                
+       5  
+       6  
+       9 -def make_client(**overrides) -> TestClient:                    
+      10 -    settings = Settings(_env_file=None, **overrides)           
+      11 -    return TestClient(create_app(settings))                    
+      12 -                                                               
+      13 -                                                               
+      14 -def test_health_reports_config_without_leaking_key():          
+       7 +def test_health_reports_config_without_leaking_key(make_client)
+         +:                                                              
+       8      client = make_client(anthropic_api_key="sk-secret", llm_mod
+          el="claude-haiku-4-5")
+       9      resp = client.get("/api/health")
+      10      assert resp.status_code == 200
+     ...
+      15      assert "sk-secret" not in resp.text
+      16  
+      17  
+      25 -def test_health_flags_missing_api_key():                       
+      18 +def test_health_flags_missing_api_key(make_client):            
+      19      body = make_client(anthropic_api_key="").get("/api/health")
+          .json()
+      20      assert body["llm_configured"] is False
+      21  
+     ...
+      29          Settings(_env_file=None, chunk_size=100, chunk_overlap=
+          100)
+      30  
+      31  
+      39 -def test_root_serves_ui():                                     
+      32 +def test_root_serves_ui(make_client):                          
+      33      resp = make_client().get("/")
+      34      assert resp.status_code == 200
+      35      assert "RAG Generator" in resp.text
+
+⏺ Write(tests/test_sessions.py)
+  ⎿  Wrote 115 lines to tests/test_sessions.py
+      1 from app.sessions import SessionStore
+      2
+      3
+      4 class FakeClock:
+      5     def __init__(self, now: float = 1_000_000.0):
+      6         self.now = now
+      7
+      8     def __call__(self) -> float:
+      9         return self.now
+     … +115 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 17 tests pass. I noticed create_app() runs at import time and opens the
+  database as a side effect, so I'll switch to uvicorn's --factory mode to avoid
+  that.
+
+⏺ Update(app/main.py)
+  ⎿  Removed 3 lines
+       98      # Mounted last so /api routes take precedence.
+       99      app.mount("/", StaticFiles(directory=STATIC_DIR, html=True
+           ), name="static")
+      100      return app
+      101 -                                                              
+      102 -                                                              
+      103 -app = create_app()                                            
+
+⏺ Update(app/main.py)
+  ⎿  Added 4 lines, removed 1 line
+      1 -"""FastAPI application entry point."""                          
+      1 +"""FastAPI application entry point.                             
+      2  
+      3 +Run with: uvicorn app.main:create_app --factory                 
+      4 +"""                                                             
+      5 +                                                                
+      6  import asyncio
+      7  import contextlib
+      8  import logging
+
+⏺ Update(plan.md)
+  ⎿  Added 1 line
+      88  | Method | Path | Purpose |
+      89  |---|---|---|
+      90  | `POST` | `/api/sessions` | Create a session; returns `session
+          _id` |
+      91 +| `GET` | `/api/sessions/{id}` | Check a session is still valid
+         + (used to resume after a page refresh) |                       
+      92  | `DELETE` | `/api/sessions/{id}` | Delete a session and its do
+          cuments |
+      93  | `POST` | `/api/sessions/{id}/documents` | Upload files (multi
+          part) and index them synchronously |
+      94  | `GET` | `/api/sessions/{id}/documents` | List indexed documen
+          ts |
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Milestone 2 is finished and committed (da3e58d). All 17 tests pass, and I
+  tested create, read and delete of a session against the running server.
+
+  What was added:
+  - app/sessions.py keeps the list of sessions in a small SQLite file at
+    data/sessions.db, so sessions survive a server restart. A session expires
+    after 24 hours with no activity, and every request that uses a session
+    resets that timer.
+  - Cleanup of expired sessions runs when the server starts and then every hour.
+    It calls one hook, remove_session_data, which is empty for now. In
+    milestone 4 I'll connect it to the vector store, so an expired or deleted
+    session also loses its indexed documents.
+  - Endpoints:
+    - POST /api/sessions creates a session.
+    - GET /api/sessions/{id} returns a session, or 404 if it has expired or
+      doesn't exist.
+    - DELETE /api/sessions/{id} deletes a session.
+
+    I added the GET endpoint to plan.md because the UI needs it to resume a
+    session after a page refresh.
+  - Tests: there are 12 new session tests. A fake clock lets them check expiry,
+    that activity extends a session, cleanup, surviving a restart, and the
+    endpoints.
+
+  The command to start the server has changed to:
+  .venv/bin/uvicorn app.main:create_app --factory
+  This means importing the code no longer creates the database file as a side
+  effect.
+
+  Should I move on to milestone 3, ingestion (upload checks, PDF/TXT reading and
+  chunking)?
+
+❯ yes
+
+⏺ Write(app/ingestion/errors.py)
+  ⎿  Wrote 36 lines to app/ingestion/errors.py
+       1 """Ingestion errors carry the HTTP status the API should return
+         for them."""
+       2
+       3
+       4 class IngestionError(Exception):
+       6
+       7     def __init__(self, message: str, filename: str = ""):
+       8         super().__init__(message)
+       9         self.message = message
+      10         self.filename = filename
+     … +28 lines (ctrl+o to expand)
+
+⏺ Write(app/ingestion/validation.py)
+  ⎿  Wrote 60 lines to app/ingestion/validation.py
+       1 """Upload limit checks, run before any parsing so oversized inpu
+         t is rejected cheaply."""
+       2
+       3 from pathlib import PurePath
+       4
+       6 from app.ingestion.errors import (
+       7     FileTooLarge,
+       8     SessionDocumentLimit,
+       9     TooManyFiles,
+      10     UnsupportedFileType,
+     … +64 lines (ctrl+o to expand)
+
+⏺ Write(app/ingestion/loaders.py)
+  ⎿  Wrote 93 lines to app/ingestion/loaders.py
+       1 """Turn raw PDF / TXT bytes into page-level text."""
+       2
+       3 import io
+       4 import logging
+       5 import re
+       6 from dataclasses import dataclass
+       7 from typing import List, Optional
+       8
+       9 from pypdf import PdfReader
+      10 from pypdf.errors import PdfReadError
+     … +95 lines (ctrl+o to expand)
+
+⏺ Write(app/ingestion/chunker.py)
+  ⎿  Wrote 78 lines to app/ingestion/chunker.py
+       1 """Recursive character chunking that keeps page numbers for cita
+       2
+       3 Text is split on the coarsest separator available (paragraphs, t
+       4 sentences, words, characters) until every piece fits in `chunk_s
+         ize`, then
+         acters of
+       6 trailing context carried into the next chunk. Chunks never span
+       7 each chunk cites exactly one page.
+       8 """
+      10 from dataclasses import dataclass
+     … +86 lines (ctrl+o to expand)
+⏺ Write(app/ingestion/__init__.py)
+  ⎿  Wrote 34 lines to app/ingestion/__init__.py
+       1 """Ingestion pipeline: validate -> load -> chunk."""
+       2
+       3 from dataclasses import dataclass
+       4 from typing import List
+       5
+       7 from app.ingestion.chunker import Chunk, chunk_document
+       8 from app.ingestion.errors import IngestionError
+       9 from app.ingestion.loaders import LoadedDocument, load_document
+      10 from app.ingestion.validation import clean_filename, validate_ba
+         tch, validate_file
+     … +30 lines (ctrl+o to expand)
+
+⏺ Now tests. To exercise the loaders with real PDFs, I'll add a small helper
+  that writes PDFs by hand, so the tests need no extra dependency:
+
+⏺ Write(tests/pdf_utils.py)
+  ⎿  Wrote 43 lines to tests/pdf_utils.py
+       1 """Build minimal text PDFs for tests without extra dependencies.
+         """
+       2
+       4
+       5
+       6 def _escape(s: str) -> str:
+       7     return s.replace("\\", "\\\\").replace("(", "\\(").replace("
+       8
+       9
+      10 def make_pdf(pages: List[str]) -> bytes:
+     … +41 lines (ctrl+o to expand)
+
+⏺ Write(tests/test_ingestion.py)
+  ⎿  Wrote 239 lines to tests/test_ingestion.py
+       1 import io
+       2
+       3 import pytest
+       4 from pypdf import PdfWriter
+       5
+       6 from app.ingestion import process_file
+       7 from app.ingestion.chunker import split_text
+       8 from app.ingestion.errors import (
+       9     FileTooLarge,
+      10     SessionDocumentLimit,
+     … +253 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 53 tests pass on the first run. Committing:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ git add -A accidentally staged .claude/settings.local.json, your local Claude
+  Code permissions file, which shouldn't be committed. I'll inspect it and
+  remove it from the unpushed commit.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Milestone 3 is finished and committed (0276fa8). All 53 tests pass.
+
+  What was added, in app/ingestion/:
+  - Upload checks in validation.py (app/ingestion/validation.py), which run
+    before any file is parsed:
+    - Limits: the number of files per upload and the number of documents per
+      session.
+    - File checks: file size, and the extension (.pdf or .txt, case doesn't
+      matter).
+    - Content matches the extension: a .pdf must actually start like a PDF, and
+      a .txt must not be binary.
+    - Filenames: folder paths are stripped from uploaded names, so a name like
+      ../../x.pdf becomes x.pdf.
+  - Reading files in loaders.py (app/ingestion/loaders.py):
+    - PDFs are read page by page so page numbers are kept. Uploads over the page
+      limit, password-protected files, corrupt files and PDFs with no text
+      (such as scanned ones) are rejected with a clear message.
+    - Text files are read as UTF-8, falling back to Latin-1 for older encodings.
+  - Chunking in chunker.py (app/ingestion/chunker.py) splits text at paragraph
+    breaks where it can, then at lines, sentences and words. Chunks are about
+    800 characters, and the end of each chunk is repeated at the start of the
+    next one. A chunk never crosses a page boundary, so every citation points to
+    exactly one page.
+  - Error codes: each kind of rejection maps to its own HTTP status, so
+    milestone 4's upload endpoint can return errors directly. Unsupported type
+    is 415, too large or too many pages is 413, unreadable is 422, and session
+    document limit reached is 409.
+  - Tests: tests/pdf_utils.py builds real PDFs by hand, so the tests read actual
+    PDFs without any mocking. There are 36 new tests, covering every limit,
+    both file formats, the error cases and how chunks are sized and overlap.
+
+  One fix along the way: my first commit accidentally included
+  .claude/settings.local.json, your local Claude Code permission settings. I
+  removed it from the commit before anything was pushed and added it to
+  .gitignore.
+
+  Should I carry on with milestone 4, the vector store and the upload endpoint?
+  The first run will download the embedding model, which is about 130 MB.
+
+❯ <ide_opened_file>The user opened the file /Users/ashishsahu/Documents/SDE-Int
+  erview-Preparation-2026/hrclabs/hrclabsrag/.gitignore in the IDE. This may or
+  may not be related to the current task.</ide_opened_file>
+
+❯ yes
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ ChromaDB behaved as expected—cosine distance and a NotFoundError on deleting a
+  missing collection. Now I'll add a documents table to the session database to
+  make listing documents and enforcing the per-session limit cheap.
+
+⏺ Update(app/sessions.py)
+  ⎿  Added 3 lines, removed 2 lines
+      1 -"""Session registry backed by SQLite, so sessions survive server
+        - restarts.                                                      
+      1 +"""Session and document registry backed by SQLite, so both survi
+        +ve server restarts.                                             
+      2  
+      3  A session is the unit of isolation: it owns one document set and
+          one chat.
+      4  Sessions expire after `ttl` of inactivity; every successful look
+         up refreshes
+      5 -the activity timestamp.                                         
+      5 +the activity timestamp. Chunk vectors live in the vector store; 
+        +this registry                                                   
+      6 +holds the per-document metadata used for listing and limit check
+        +s.                                                              
+      7  """
+      8  
+      9  import sqlite3
+
+⏺ Update(app/sessions.py)
+  ⎿  Added 29 lines
+      33          }
+      34  
+      35  
+      36 +@dataclass(frozen=True)                                        
+      37 +class DocumentRecord:                                          
+      38 +    id: str                                                    
+      39 +    session_id: str                                            
+      40 +    filename: str                                              
+      41 +    file_type: str                                             
+      42 +    page_count: Optional[int]                                  
+      43 +    chunk_count: int                                           
+      44 +    size_bytes: int                                            
+      45 +    sha256: str                                                
+      46 +    created_at: float                                          
+      47 +                                                               
+      48 +    def to_dict(self) -> dict:                                 
+      49 +        return {                                               
+      50 +            "document_id": self.id,                            
+      51 +            "filename": self.filename,                         
+      52 +            "file_type": self.file_type,                       
+      53 +            "page_count": self.page_count,                     
+      54 +            "chunk_count": self.chunk_count,                   
+      55 +            "size_bytes": self.size_bytes,                     
+      56 +            "created_at": _iso(self.created_at),               
+      57 +        }                                                      
+      58 +                                                               
+      59 +                                                               
+      60 +_DOC_COLUMNS = (                                               
+      61 +    "id, session_id, filename, file_type, page_count, chunk_cou
+         +nt, size_bytes, sha256, created_at"                            
+      62 +)                                                              
+      63 +                                                               
+      64 +                                                               
+      65  def _iso(ts: float) -> str:
+      66      return datetime.fromtimestamp(ts, tz=timezone.utc).isoforma
+          t()
+      67  
+
+⏺ Update(app/sessions.py)
+  ⎿  Added 16 lines
+       81                         last_active_at REAL NOT NULL
+       82                     )"""
+       83              )
+       84 +            self._conn.execute(                               
+       85 +                """CREATE TABLE IF NOT EXISTS documents (     
+       86 +                       id TEXT PRIMARY KEY,                   
+       87 +                       session_id TEXT NOT NULL,              
+       88 +                       filename TEXT NOT NULL,                
+       89 +                       file_type TEXT NOT NULL,               
+       90 +                       page_count INTEGER,                    
+       91 +                       chunk_count INTEGER NOT NULL,          
+       92 +                       size_bytes INTEGER NOT NULL,           
+       93 +                       sha256 TEXT NOT NULL,                  
+       94 +                       created_at REAL NOT NULL               
+       95 +                   )"""                                       
+       96 +            )                                                 
+       97 +            self._conn.execute(                               
+       98 +                "CREATE INDEX IF NOT EXISTS idx_documents_sess
+          +ion ON documents (session_id)"                                
+       99 +            )                                                 
+      100  
+      101      @property
+      102      def ttl_seconds(self) -> float:
+
+⏺ Update(app/sessions.py)
+  ⎿  Added 52 lines, removed 1 line
+      135      def delete(self, session_id: str) -> bool:
+      136          with self._lock, self._conn:
+      137              cur = self._conn.execute("DELETE FROM sessions WHE
+           RE id = ?", (session_id,))
+      138 +            self._conn.execute("DELETE FROM documents WHERE se
+          +ssion_id = ?", (session_id,))                                 
+      139          return cur.rowcount > 0
+      140  
+      141      def purge_expired(self) -> List[str]:
+     ...
+      148                      "SELECT id FROM sessions WHERE last_active
+           _at < ?", (cutoff,)
+      149                  )
+      150              ]
+      150 -            self._conn.executemany("DELETE FROM sessions WHERE
+          - id = ?", [(i,) for i in ids])                                
+      151 +            params = [(i,) for i in ids]                      
+      152 +            self._conn.executemany("DELETE FROM sessions WHERE
+          + id = ?", params)                                             
+      153 +            self._conn.executemany("DELETE FROM documents WHER
+          +E session_id = ?", params)                                    
+      154          return ids
+      155  
+      156 +    # --- documents ------------------------------------------
+          +---------------                                               
+      157 +                                                              
+      158 +    def add_document(                                         
+      159 +        self,                                                 
+      160 +        session_id: str,                                      
+      161 +        filename: str,                                        
+      162 +        file_type: str,                                       
+      163 +        page_count: Optional[int],                            
+      164 +        chunk_count: int,                                     
+      165 +        size_bytes: int,                                      
+      166 +        sha256: str,                                          
+      167 +    ) -> DocumentRecord:                                      
+      168 +        record = DocumentRecord(                              
+      169 +            id=uuid.uuid4().hex,                              
+      170 +            session_id=session_id,                            
+      171 +            filename=filename,                                
+      172 +            file_type=file_type,                              
+      173 +            page_count=page_count,                            
+      174 +            chunk_count=chunk_count,                          
+      175 +            size_bytes=size_bytes,                            
+      176 +            sha256=sha256,                                    
+      177 +            created_at=self._clock(),                         
+      178 +        )                                                     
+      179 +        with self._lock, self._conn:                          
+      180 +            self._conn.execute(                               
+      181 +                f"INSERT INTO documents ({_DOC_COLUMNS}) VALUE
+          +S (?, ?, ?, ?, ?, ?, ?, ?, ?)",                               
+      182 +                (                                             
+      183 +                    record.id,                                
+      184 +                    record.session_id,                        
+      185 +                    record.filename,                          
+      186 +                    record.file_type,                         
+      187 +                    record.page_count,                        
+      188 +                    record.chunk_count,                       
+      189 +                    record.size_bytes,                        
+      190 +                    record.sha256,                            
+      191 +                    record.created_at,                        
+      192 +                ),                                            
+      193 +            )                                                 
+      194 +        return record                                         
+      195 +                                                              
+      196 +    def list_documents(self, session_id: str) -> List[Document
+          +Record]:                                                      
+      197 +        with self._lock:                                      
+      198 +            rows = self._conn.execute(                        
+      199 +                f"SELECT {_DOC_COLUMNS} FROM documents WHERE s
+          +ession_id = ? ORDER BY created_at, rowid",                    
+      200 +                (session_id,),                                
+      201 +            ).fetchall()                                      
+      202 +        return [DocumentRecord(*row) for row in rows]         
+      203 +                                                              
+      204      def close(self) -> None:
+      205          self._conn.close()
+      206  
+
+⏺ Now the embedder and vector store:
+
+⏺ Write(app/store.py)
+  ⎿  Wrote 142 lines to app/store.py
+       1 """Embeddings and the per-session vector store (ChromaDB, persis
+         ted to disk)."""
+       2
+       3 import logging
+       4 import threading
+       6 from pathlib import Path
+       7 from typing import List, Optional, Sequence
+       8
+       9 import chromadb
+      10 from chromadb.config import Settings as ChromaSettings
+     … +154 lines (ctrl+o to expand)
+
+⏺ typing.Protocol already exists in Python 3.8+, so the fallback import isn't
+  needed. Cleaning that up:
+
+⏺ Update(app/store.py)
+  ⎿  Added 1 line, removed 6 lines
+       4  import threading
+       5  from dataclasses import dataclass
+       6  from pathlib import Path
+       7 -from typing import List, Optional, Sequence                    
+       7 +from typing import List, Optional, Protocol, Sequence          
+       8  
+       9  import chromadb
+      10  from chromadb.config import Settings as ChromaSettings
+     ...
+      12  
+      13  from app.ingestion import Chunk
+      14  
+      15 -try:  # Python 3.9-compatible Protocol import                  
+      16 -    from typing import Protocol                                
+      17 -except ImportError:  # pragma: no cover                        
+      18 -    from typing_extensions import Protocol                     
+      19 -                                                               
+      15  logger = logging.getLogger(__name__)
+      16  
+      17  # BGE v1.5 models retrieve better when short queries carry this
+           instruction.
+
+⏺ Update(app/sessions.py)
+  ⎿  Added 4 lines
+      193              )
+      194          return record
+      195  
+      196 +    def delete_document(self, document_id: str) -> None:      
+      197 +        with self._lock, self._conn:                          
+      198 +            self._conn.execute("DELETE FROM documents WHERE id
+          + = ?", (document_id,))                                        
+      199 +                                                              
+      200      def list_documents(self, session_id: str) -> List[Document
+           Record]:
+      201          with self._lock:
+      202              rows = self._conn.execute(
+
+⏺ Update(app/ingestion/errors.py)
+  ⎿  Added 4 lines
+      30      status_code = 409
+      31  
+      32  
+      33 +class DuplicateDocument(IngestionError):                       
+      34 +    status_code = 409                                          
+      35 +                                                               
+      36 +                                                               
+      37  class UnreadableDocument(IngestionError):
+      38      """Corrupt, encrypted, or has no extractable text (e.g. a s
+          canned PDF)."""
+      39  
+
+⏺ Update(app/ingestion/validation.py)
+  ⎿  Added 2 lines, removed 1 line
+      48      if len(data) == 0:
+      49          raise UnsupportedFileType("File is empty.", filename)
+      50      if len(data) > settings.max_file_size_bytes:
+      51 +        # The API reads at most limit+1 bytes, so the true size
+         + is unknown here.                                              
+      52          raise FileTooLarge(
+      52 -            f"File is {len(data) / 1024 / 1024:.1f} MB; the lim
+         -it is {settings.max_file_size_mb} MB.",                        
+      53 +            f"File exceeds the size limit; the limit is {settin
+         +gs.max_file_size_mb} MB.",                                     
+      54              filename,
+      55          )
+      56      # Check content matches the extension, so e.g. a renamed bi
+          nary isn't accepted.
+
+⏺ Update(app/ingestion/__init__.py)
+  ⎿  Added 10 lines, removed 2 lines
+       1  """Ingestion pipeline: validate -> load -> chunk."""
+       2  
+       3 +import hashlib                                                 
+       4  from dataclasses import dataclass
+       5  from typing import List
+       6  
+       7  from app.config import Settings
+       8  from app.ingestion.chunker import Chunk, chunk_document
+       8 -from app.ingestion.errors import IngestionError                
+       9 +from app.ingestion.errors import DuplicateDocument, IngestionEr
+         +ror                                                            
+      10  from app.ingestion.loaders import LoadedDocument, load_document
+      11  from app.ingestion.validation import clean_filename, validate_b
+          atch, validate_file
+      12  
+      13  __all__ = [
+      14      "Chunk",
+      15 +    "DuplicateDocument",                                       
+      16      "IngestionError",
+      17      "ProcessedDocument",
+      18      "process_file",
+     ...
+      25      document: LoadedDocument
+      26      chunks: List[Chunk]
+      27      size_bytes: int
+      28 +    sha256: str                                                
+      29  
+      30  
+      31  def process_file(filename: str, data: bytes, settings: Settings
+          ) -> ProcessedDocument:
+     ...
+      34      file_type = validate_file(filename, data, settings)
+      35      document = load_document(filename, file_type, data, setting
+          s.max_pdf_pages)
+      36      chunks = chunk_document(document, settings.chunk_size, sett
+          ings.chunk_overlap)
+      34 -    return ProcessedDocument(document=document, chunks=chunks, 
+         -size_bytes=len(data))                                          
+      37 +    return ProcessedDocument(                                  
+      38 +        document=document,                                     
+      39 +        chunks=chunks,                                         
+      40 +        size_bytes=len(data),                                  
+      41 +        sha256=hashlib.sha256(data).hexdigest(),               
+      42 +    )                                                          
+
+⏺ Next, a small service that runs an upload as a single unit: it takes a lock
+  per session, rejects duplicate files, and rolls everything back if indexing
+  fails partway:
+⏺ Write(app/documents.py)
+  ⎿  Wrote 74 lines to app/documents.py
+       1 """Synchronous, all-or-nothing ingestion of an upload batch into
+          a session."""
+       2
+       4 from collections import defaultdict
+       5 from typing import Dict, List, Sequence, Tuple
+       6
+       7 from app.config import Settings
+         process_file, validate_batch
+       9 from app.sessions import DocumentRecord, SessionStore
+      10 from app.store import VectorStore
+     … +76 lines (ctrl+o to expand)
+
+⏺ Write(app/main.py)
+  ⎿  Added 59 lines, removed 10 lines
+       9  from pathlib import Path
+      10  from typing import List, Optional
+      11  
+      12 -from fastapi import Depends, FastAPI, HTTPException, Request, R
+         -esponse, status                                                
+      12 +from fastapi import Depends, FastAPI, File, HTTPException, Requ
+         +est, Response, UploadFile, status                              
+      13 +from fastapi.responses import JSONResponse                     
+      14  from fastapi.staticfiles import StaticFiles
+      15  
+      16  from app.config import Settings, get_settings
+      17 +from app.documents import DocumentService                      
+      18 +from app.ingestion import IngestionError                       
+      19  from app.sessions import Session, SessionStore
+      20 +from app.store import Embedder, SentenceTransformerEmbedder, Ve
+         +ctorStore                                                      
+      21  
+      22  logger = logging.getLogger(__name__)
+      23  
+      24  STATIC_DIR = Path(__file__).parent / "static"
+      25  PURGE_INTERVAL_SECONDS = 3600
+      26 +MULTIPART_OVERHEAD_BYTES = 64 * 1024                           
+      27  
+      28  
+      24 -def create_app(settings: Optional[Settings] = None) -> FastAPI:
+      29 +def create_app(settings: Optional[Settings] = None, embedder: O
+         +ptional[Embedder] = None) -> FastAPI:                          
+      30      settings = settings or get_settings()
+      31 +    embedder = embedder or SentenceTransformerEmbedder(settings
+         +.embedding_model)                                              
+      32      sessions = SessionStore(
+      33          settings.data_dir / "sessions.db", ttl_seconds=settings
+          .session_ttl_hours * 3600
+      34      )
+      35 +    store = VectorStore(settings.data_dir / "chroma", embedder)
+      36 +    documents = DocumentService(settings, sessions, store)     
+      37  
+      30 -    def remove_session_data(session_id: str) -> None:          
+      31 -        """Delete everything a session owns besides its registr
+         -y row (documents, vectors)."""                                 
+      32 -        # Wired to the vector store in milestone 4.            
+      33 -                                                               
+      38      def purge_expired_sessions() -> List[str]:
+      39          expired = sessions.purge_expired()
+      40          for session_id in expired:
+      37 -            remove_session_data(session_id)                    
+      41 +            documents.forget_session(session_id)               
+      42          if expired:
+      43              logger.info("Purged %d expired session(s)", len(exp
+          ired))
+      44          return expired
+     ...
+      52      @contextlib.asynccontextmanager
+      53      async def lifespan(_: FastAPI):
+      54          purge_expired_sessions()
+      51 -        task = asyncio.create_task(purge_periodically())       
+      55 +        tasks = [asyncio.create_task(purge_periodically())]    
+      56 +        load = getattr(embedder, "load", None)                 
+      57 +        if load is not None:  # warm the model in the backgroun
+         +d so the first upload is fast                                  
+      58 +            tasks.append(asyncio.create_task(asyncio.to_thread(
+         +load)))                                                        
+      59          try:
+      60              yield
+      61          finally:
+      55 -            task.cancel()                                      
+      62 +            for task in tasks:                                 
+      63 +                task.cancel()                                  
+      64              sessions.close()
+      65  
+      66      app = FastAPI(title="RAG Generator", version="0.1.0", lifes
+          pan=lifespan)
+      67      app.state.settings = settings
+      68      app.state.sessions = sessions
+      69 +    app.state.store = store                                    
+      70      app.state.purge_expired_sessions = purge_expired_sessions
+      71  
+      72 +    @app.exception_handler(IngestionError)                     
+      73 +    async def ingestion_error_handler(_: Request, exc: Ingestio
+         +nError) -> JSONResponse:                                       
+      74 +        return JSONResponse(                                   
+      75 +            status_code=exc.status_code,                       
+      76 +            content={"detail": exc.message, "filename": exc.fil
+         +ename or None},                                                
+      77 +        )                                                      
+      78 +                                                               
+      79 +    @app.middleware("http")                                    
+      80 +    async def reject_oversized_uploads(request: Request, call_n
+         +ext):                                                          
+      81 +        # Reject before the multipart body is spooled to disk. 
+         +Per-file limits are                                            
+      82 +        # enforced again after parsing; this only bounds the wh
+         +ole request.                                                   
+      83 +        if request.method == "POST" and request.url.path.endswi
+         +th("/documents"):                                              
+      84 +            max_body = (                                       
+      85 +                settings.max_files_per_upload * settings.max_fi
+         +le_size_bytes                                                  
+      86 +                + MULTIPART_OVERHEAD_BYTES                     
+      87 +            )                                                  
+      88 +            length = request.headers.get("content-length")     
+      89 +            if length and length.isdigit() and int(length) > ma
+         +x_body:                                                        
+      90 +                return JSONResponse(                           
+      91 +                    status_code=status.HTTP_413_REQUEST_ENTITY_
+         +TOO_LARGE,                                                     
+      92 +                    content={"detail": "Upload is larger than t
+         +he allowed total size."},                                      
+      93 +                )                                              
+      94 +        return await call_next(request)                        
+      95 +                                                               
+      96      def current_session(session_id: str) -> Session:
+      97          session = sessions.get(session_id)
+      98          if session is None:
+     ...
+      128      def delete_session(session_id: str) -> Response:
+      129          if not sessions.delete(session_id):
+      130              raise HTTPException(status.HTTP_404_NOT_FOUND, "Se
+           ssion not found or expired")
+       98 -        remove_session_data(session_id)                       
+      131 +        documents.forget_session(session_id)                  
+      132          return Response(status_code=status.HTTP_204_NO_CONTENT
+           )
+      133  
+      134 +    @app.post("/api/sessions/{session_id}/documents", status_c
+          +ode=status.HTTP_201_CREATED)                                  
+      135 +    def upload_documents(                                     
+      136 +        session: Session = Depends(current_session),          
+      137 +        files: List[UploadFile] = File(...),                  
+      138 +    ) -> dict:                                                
+      139 +        # Read at most limit+1 bytes per file: enough to detec
+          +t "too large" without                                         
+      140 +        # loading an arbitrarily large file into memory.      
+      141 +        read_limit = settings.max_file_size_bytes + 1         
+      142 +        uploaded = [(f.filename or "", f.file.read(read_limit)
+          +) for f in files]                                             
+      143 +        records = documents.ingest(session.id, uploaded)      
+      144 +        return {"documents": [r.to_dict() for r in records]}  
+      145 +                                                              
+      146 +    @app.get("/api/sessions/{session_id}/documents")          
+      147 +    def list_documents(session: Session = Depends(current_sess
+          +ion)) -> dict:                                                
+      148 +        return {"documents": [r.to_dict() for r in sessions.li
+          +st_documents(session.id)]}                                    
+      149 +                                                              
+      150      # Mounted last so /api routes take precedence.
+      151      app.mount("/", StaticFiles(directory=STATIC_DIR, html=True
+           ), name="static")
+      152      return app
+
+⏺ Now the tests. They use a deterministic fake embedder so they run fast and
+  offline. One extra test, marked slow, uses the real BGE model to check that
+  retrieval quality is good:
+
+⏺ Write(tests/conftest.py)
+  ⎿  Added 27 lines, removed 2 lines
+      1 +import hashlib                                                  
+      2 +import math                                                     
+      3 +import re                                                       
+      4 +from typing import List, Sequence                               
+      5 +                                                                
+      6  import pytest
+      7  from fastapi.testclient import TestClient
+      8  
+     ...
+      10  from app.main import create_app
+      11  
+      12  
+      13 +class FakeEmbedder:                                            
+      14 +    """Deterministic bag-of-words hashing embedder: texts shari
+         +ng words are similar."""                                       
+      15 +                                                               
+      16 +    DIM = 256                                                  
+      17 +                                                               
+      18 +    def _embed(self, text: str) -> List[float]:                
+      19 +        vec = [0.0] * self.DIM                                 
+      20 +        for word in re.findall(r"[a-z0-9]+", text.lower()):    
+      21 +            vec[int(hashlib.md5(word.encode()).hexdigest(), 16)
+         + % self.DIM] += 1.0                                            
+      22 +        norm = math.sqrt(sum(v * v for v in vec)) or 1.0       
+      23 +        return [v / norm for v in vec]                         
+      24 +                                                               
+      25 +    def embed_documents(self, texts: Sequence[str]) -> List[Lis
+         +t[float]]:                                                     
+      26 +        return [self._embed(t) for t in texts]                 
+      27 +                                                               
+      28 +    def embed_query(self, text: str) -> List[float]:           
+      29 +        return self._embed(text)                               
+      30 +                                                               
+      31 +                                                               
+      32  @pytest.fixture
+      33  def make_settings(tmp_path):
+      34      def _make(**overrides) -> Settings:
+     ...
+      42  def make_client(make_settings):
+      43      clients = []
+      44  
+      21 -    def _make(**overrides) -> TestClient:                      
+      22 -        client = TestClient(create_app(make_settings(**override
+         -s)))                                                           
+      45 +    def _make(embedder=None, **overrides) -> TestClient:       
+      46 +        app = create_app(make_settings(**overrides), embedder=e
+         +mbedder or FakeEmbedder())                                     
+      47 +        client = TestClient(app)                               
+      48          client.__enter__()  # run lifespan (startup purge, back
+          ground task)
+      49          clients.append(client)
+      50          return client
+
+⏺ Write(pytest.ini)
+  ⎿  Wrote 5 lines to pytest.ini
+      1 [pytest]
+      2 testpaths = tests
+      3 markers =
+      4     slow: uses the real embedding model (downloads it on first ru
+        n); run with `pytest -m slow`
+      5 addopts = -m "not slow"
+
+⏺ Write(tests/test_store.py)
+  ⎿  Wrote 93 lines to tests/test_store.py
+       1 import pytest
+       2
+       3 from app.ingestion import Chunk
+       4 from app.store import SentenceTransformerEmbedder, VectorStore
+       5 from tests.conftest import FakeEmbedder
+       6
+       7
+       8 @pytest.fixture
+       9 def store(tmp_path):
+      10     return VectorStore(tmp_path / "chroma", FakeEmbedder())
+     … +100 lines (ctrl+o to expand)
+
+⏺ Write(tests/test_documents_api.py)
+  ⎿  Wrote 166 lines to tests/test_documents_api.py
+      1 import pytest
+      2
+      3 from tests.pdf_utils import make_pdf
+      4
+      5
+      6 @pytest.fixture
+      7 def client(make_client):
+      8     return make_client(max_file_size_mb=1, max_files_per_upload=3
+        , max_docs_per_session=4)
+      9
+     … +179 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 78 tests pass. There's one deprecation warning, which I'll fix by using the
+  literal status code 413. Then I'll run the slow test with the real model,
+  which downloads it on this first run:
+
+⏺ Update(app/main.py)
+  ⎿  Added 1 line, removed 1 line
+      88              length = request.headers.get("content-length")
+      89              if length and length.isdigit() and int(length) > ma
+          x_body:
+      90                  return JSONResponse(
+      91 -                    status_code=status.HTTP_413_REQUEST_ENTITY_
+         -TOO_LARGE,                                                     
+      91 +                    status_code=413,                           
+      92                      content={"detail": "Upload is larger than t
+          he allowed total size."},
+      93                  )
+      94          return await call_next(request)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The real-model test passes, with the two warnings coming from third-party
+  libraries rather than our code. Next, I'll time a live upload of a 200-page
+  PDF to confirm the page cap keeps synchronous uploads quick.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Confirmed a 200-page PDF (1,000 chunks) indexes in about 2.8 seconds and
+  duplicate detection works on the live server, so synchronous ingestion stays
+  within limits. I'll add these two behaviors to the plan and commit.
+
+⏺ Update(plan.md)
+  ⎿  Added 2 lines
+      49  | Max documents per session | 20 (`MAX_DOCS_PER_SESSION`) | Kee
+          ps per-session index small and retrieval fast |
+      50  | Accepted types | `.pdf`, `.txt` | Checked by extension and co
+          ntent (PDF magic bytes / UTF-8 decodability) |
+      51  | TXT encoding | UTF-8, fallback latin-1 | Avoids rejecting com
+          mon non-UTF-8 files |
+      52 +| Upload atomicity | All-or-nothing per request | If any file i
+         +s rejected or indexing fails, nothing from that upload is kept 
+         +|                                                              
+      53 +| Duplicate content | Rejected (SHA-256 per session) | Same fil
+         +e under a different name would skew retrieval with repeated chu
+         +nks |                                                          
+      54  | Session lifetime | Expires after 24 h idle (`SESSION_TTL_HOUR
+          S`) | Expired sessions and their collections are purged at star
+          tup and periodically |
+      55  | Chat history | Last 6 turns sent by the client with each ques
+          tion | Supports follow-up questions while keeping the server st
+          ateless for chat |
+      56  | Retrieval | top-k = 5 (`TOP_K`), chunk ~800 chars / 150 overl
+          ap | Fits comfortably in the prompt; tunable |
+
+⏺ Update(plan.md)
+  ⎿  Added 3 lines, removed 1 line
+      55  | Chat history | Last 6 turns sent by the client with each ques
+          tion | Supports follow-up questions while keeping the server st
+          ateless for chat |
+      56  | Retrieval | top-k = 5 (`TOP_K`), chunk ~800 chars / 150 overl
+          ap | Fits comfortably in the prompt; tunable |
+      57  
+      58 -Rejections return a clear 4xx error: oversized file, too many p
+         -ages/files, unsupported type, PDF with no extractable text, ses
+         -sion document limit reached, unknown/expired session.          
+      58 +Rejections return a clear 4xx error naming the offending file: 
+         +oversized file, too many pages/files, unsupported type, PDF wit
+         +h no extractable text, duplicate, session document limit reache
+         +d, unknown/expired session.                                    
+      59  
+      60 +Measured: a 200-page text PDF (1,000 chunks) ingests in ~3 s on
+         + a laptop, so synchronous ingestion is comfortable within these
+         + limits.                                                       
+      61 +                                                               
+      62  ## Requirements
+      63  
+      64  ### Functional
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Milestone 4 is finished and committed (d8490dd). 78 fast tests pass, plus 1
+  slow test that uses the real embedding model.
+
+  What was added:
+  - Vector store in app/store.py:
+    - Separation: each session gets its own ChromaDB collection, so a search in
+      one session can't reach another session's documents.
+    - Citations: each chunk is stored with its file name and page number.
+    - Embeddings: the BGE model loads in the background when the server starts,
+      so the first upload isn't slow. BGE is also given the phrasing it expects
+      for search queries.
+  - Upload handling in app/documents.py:
+    - All or nothing: every file in an upload is checked and parsed before
+      anything is indexed. If one file is rejected, or indexing fails partway,
+      nothing from that upload is kept.
+    - Duplicates: the same file content can't be added to a session twice, even
+      under a different name.
+    - Concurrent uploads: simultaneous uploads to the same session are handled
+      one at a time, so they can't get around the document limit.
+  - Document list: the session database now also records each document, which
+    makes listing documents and checking the limit quick.
+  - Endpoints:
+    - POST /api/sessions/{id}/documents uploads files.
+    - GET /api/sessions/{id}/documents lists them.
+
+    Errors name the file that caused them, for example {"detail": "...",
+    "filename": "bad.docx"}.
+  - Oversized uploads: a request that is too large overall is rejected before
+    it's read, and at most one byte over the file-size limit is read per file.
+  - Cleanup: deleting a session, or a session expiring, now also removes its
+    indexed documents.
+  - Tests: there are 25 new tests. They use a fast fake embedder, and one slow
+    test uses the real model. Run it with pytest -m slow.
+
+  Measured on the live server: a 200-page PDF (1,000 chunks) is indexed in about
+  2.8 seconds. That confirms synchronous ingestion is fine within the limits,
+  and I've noted it in plan.md along with the all-or-nothing and duplicate
+  rules.
+
+  Next is milestone 5, the question-answering endpoint with Claude. For that I
+  need ANTHROPIC_API_KEY set in .env. The automated tests will simulate Claude,
+  but the final check needs the real API. Should I go ahead?
+
+❯ <ide_opened_file>The user opened the file /Users/ashishsahu/Documents/SDE-Int
+  erview-Preparation-2026/hrclabs/hrclabsrag/.env in the IDE. This may or may
+  not be related to the current task.</ide_opened_file>
+
+❯ yes
+
+⏺ Milestone 5 calls the Claude API, so I'll first load the Claude API reference
+  to make sure the SDK usage and model details are current.
+
+⏺ Skill(claude-api)
+  ⎿  Successfully loaded skill · 1 tool allowed
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+⏺ I'll use the async messages.stream() helper with adaptive thinking
+  (configurable via LLM_EFFORT), raise max_tokens to 16000, and skip prompt
+  caching since it wouldn't help here—noting that in the README. Since your .env
+  lacks an API key, I'll run automated tests with a fake model and check for
+  credentials before the final live test.
+
+⏺ Write(app/llm.py)
+  ⎿  Wrote 81 lines to app/llm.py
+      1 """Thin streaming wrapper around the Claude Messages API.
+      2
+      3 Kept behind a small interface so the RAG pipeline can be tested w
+        ith a fake.
+      4 """
+      6 from dataclasses import dataclass, field
+      7 from typing import AsyncIterator, Dict, List, Optional, Protocol,
+         Union
+      8
+      9 import anthropic
+     … +85 lines (ctrl+o to expand)
+
+⏺ Now the config additions:
+
+⏺ Update(app/config.py)
+  ⎿  Added 3 lines, removed 1 line
+      13      # LLM
+      14      anthropic_api_key: str = ""
+      15      llm_model: str = "claude-sonnet-5"
+      16 -    llm_max_tokens: int = Field(1024, gt=0)                    
+      16 +    # Adaptive thinking tokens count toward max_tokens, so keep
+         + headroom.                                                     
+      17 +    llm_max_tokens: int = Field(16000, gt=0)                   
+      18 +    llm_effort: Literal["low", "medium", "high", "xhigh", "max"
+         +] = "medium"                                                   
+      19  
+      20      # Embeddings / storage
+      21      embedding_model: str = "BAAI/bge-small-en-v1.5"
+
+⏺ Update(app/config.py)  ⎿  Added 1 line
+      30      # Sessions / chat
+      31      session_ttl_hours: int = Field(24, gt=0)
+      32      max_history_turns: int = Field(6, ge=0)
+      33 +    max_question_chars: int = Field(2000, gt=0)                
+      34  
+      35      # Retrieval
+      36      chunk_size: int = Field(800, gt=0)
+
+⏺ Update(app/config.py)
+  ⎿  Added 1 line
+      2  
+      3  from functools import lru_cache
+      4  from pathlib import Path
+      5 +from typing import Literal                                      
+      6  
+      7  from pydantic import Field, model_validator
+      8  from pydantic_settings import BaseSettings, SettingsConfigDict
+
+⏺ Update(.env.example)
+  ⎿  Added 3 lines, removed 1 line
+      1  # --- LLM ---
+      2  ANTHROPIC_API_KEY=
+      3  LLM_MODEL=claude-sonnet-5
+      4 -LLM_MAX_TOKENS=1024                                             
+      4 +LLM_MAX_TOKENS=16000                                            
+      5 +# low | medium | high | xhigh | max — higher is more thorough bu
+        +t slower                                                        
+      6 +LLM_EFFORT=medium                                               
+      7  
+      8  # --- Embeddings / storage ---
+      9  EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+
+⏺ Update(.env.example)
+  ⎿  Added 1 line
+      18  # --- Sessions / chat ---
+      19  SESSION_TTL_HOURS=24
+      20  MAX_HISTORY_TURNS=6
+      21 +MAX_QUESTION_CHARS=2000                                        
+      22  
+      23  # --- Retrieval ---
+      24  CHUNK_SIZE=800
+
+⏺ Next, the RAG pipeline: prompt building, retrieval and the event stream.
+
+⏺ Write(app/rag.py)
+  ⎿  Wrote 161 lines to app/rag.py
+       1 """Retrieval-augmented answering: retrieve -> build grounded pro
+       2
+       3 The answer is streamed as Server-Sent Events:
+         "snippet"}, ...]
+       5   event: delta    data: {"text": "..."}                       (r
+       6   event: done     data: {"stop_reason", "cited": [1, 3], "usage"
+         : {...}}
+         nstead of done)
+       8 """
+      10 import asyncio
+     … +192 lines (ctrl+o to expand)
+
+⏺ Now the endpoint in main.py:
+
+⏺ Update(app/main.py)
+  ⎿  Added 3 lines, removed 1 line
+      10  from typing import List, Optional
+      11  
+      12  from fastapi import Depends, FastAPI, File, HTTPException, Requ
+          est, Response, UploadFile, status
+      13 -from fastapi.responses import JSONResponse                     
+      13 +from fastapi.responses import JSONResponse, StreamingResponse  
+      14  from fastapi.staticfiles import StaticFiles
+      15  
+      16  from app.config import Settings, get_settings
+      17  from app.documents import DocumentService
+      18  from app.ingestion import IngestionError
+      19 +from app.llm import AnswerLLM, ClaudeLLM                       
+      20 +from app.rag import QueryRequest, RAGPipeline                  
+      21  from app.sessions import Session, SessionStore
+      22  from app.store import Embedder, SentenceTransformerEmbedder, Ve
+          ctorStore
+      23  
+
+⏺ Update(app/main.py)
+  ⎿  Added 6 lines, removed 1 line
+      28  MULTIPART_OVERHEAD_BYTES = 64 * 1024
+      29  
+      30  
+      31 -def create_app(settings: Optional[Settings] = None, embedder: O
+         -ptional[Embedder] = None) -> FastAPI:                          
+      31 +def create_app(                                                
+      32 +    settings: Optional[Settings] = None,                       
+      33 +    embedder: Optional[Embedder] = None,                       
+      34 +    llm: Optional[AnswerLLM] = None,                           
+      35 +) -> FastAPI:                                                  
+      36      settings = settings or get_settings()
+      37      embedder = embedder or SentenceTransformerEmbedder(settings
+          .embedding_model)
+      38      sessions = SessionStore(
+     ...
+      40      )
+      41      store = VectorStore(settings.data_dir / "chroma", embedder)
+      42      documents = DocumentService(settings, sessions, store)
+      43 +    rag = RAGPipeline(settings, store, llm or ClaudeLLM(setting
+         +s))                                                            
+      44  
+      45      def purge_expired_sessions() -> List[str]:
+      46          expired = sessions.purge_expired()
+
+⏺ Update(app/main.py)
+  ⎿  Added 20 lines
+      154      def list_documents(session: Session = Depends(current_sess
+           ion)) -> dict:
+      155          return {"documents": [r.to_dict() for r in sessions.li
+           st_documents(session.id)]}
+      156  
+      157 +    @app.post("/api/sessions/{session_id}/query")             
+      158 +    async def query(body: QueryRequest, session: Session = Dep
+          +ends(current_session)) -> StreamingResponse:                  
+      159 +        question = body.question.strip()                      
+      160 +        if not question:                                      
+      161 +            raise HTTPException(status.HTTP_422_UNPROCESSABLE_
+          +ENTITY, "Question must not be empty.")                        
+      162 +        if len(question) > settings.max_question_chars:       
+      163 +            raise HTTPException(                              
+      164 +                status.HTTP_422_UNPROCESSABLE_ENTITY,         
+      165 +                f"Question is too long; the limit is {settings
+          +.max_question_chars} characters.",                            
+      166 +            )                                                 
+      167 +        if not await asyncio.to_thread(sessions.list_documents
+          +, session.id):                                                
+      168 +            raise HTTPException(status.HTTP_409_CONFLICT, "Upl
+          +oad documents before asking questions.")                      
+      169 +                                                              
+      170 +        chunks = await rag.retrieve(session.id, question, body
+          +.history)                                                     
+      171 +        return StreamingResponse(                             
+      172 +            rag.answer_stream(question, body.history, chunks),
+      173 +            media_type="text/event-stream",                   
+      174 +            headers={"Cache-Control": "no-cache", "X-Accel-Buf
+          +fering": "no"},                                               
+      175 +        )                                                     
+      176 +                                                              
+      177      # Mounted last so /api routes take precedence.
+      178      app.mount("/", StaticFiles(directory=STATIC_DIR, html=True
+           ), name="static")
+      179      return app
+
+⏺ The HTTP_422_UNPROCESSABLE_ENTITY constant is deprecated in this Starlette
+  version, just like the 413 one was, so I'll use the literal number again:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now the tests. I'll add a fake model to conftest.py:
+
+⏺ Update(tests/conftest.py)
+  ⎿  Added 16 lines
+      29          return self._embed(text)
+      30  
+      31  
+      32 +class FakeLLM:                                                 
+      33 +    """Records each call and replays a scripted list of StreamE
+         +vents (or raises)."""                                          
+      34 +                                                               
+      35 +    def __init__(self, events=None, error: Exception = None):  
+      36 +        self.events = events if events is not None else [TextDe
+         +lta("Answer [1]."), Completed("end_turn")]                     
+      37 +        self.error = error                                     
+      38 +        self.calls = []                                        
+      39 +                                                               
+      40 +    async def stream(self, system, messages):                  
+      41 +        self.calls.append({"system": system, "messages": messag
+         +es})                                                           
+      42 +        for event in self.events:                              
+      43 +            yield event                                        
+      44 +        if self.error:                                         
+      45 +            raise self.error                                   
+      46 +                                                               
+      47 +                                                               
+      48  @pytest.fixture
+      49  def make_settings(tmp_path):
+      50      def _make(**overrides) -> Settings:
+
+⏺ Update(tests/conftest.py)
+  ⎿  Added 4 lines, removed 2 lines
+      58  def make_client(make_settings):
+      59      clients = []
+      60  
+      61 -    def _make(embedder=None, **overrides) -> TestClient:       
+      62 -        app = create_app(make_settings(**overrides), embedder=e
+         -mbedder or FakeEmbedder())                                     
+      61 +    def _make(embedder=None, llm=None, **overrides) -> TestClie
+         +nt:                                                            
+      62 +        app = create_app(                                      
+      63 +            make_settings(**overrides), embedder=embedder or Fa
+         +keEmbedder(), llm=llm or FakeLLM()                             
+      64 +        )                                                      
+      65          client = TestClient(app)
+      66          client.__enter__()  # run lifespan (startup purge, back
+          ground task)
+      67          clients.append(client)
+
+⏺ Update(tests/conftest.py)
+  ⎿  Added 1 line
+       7  from fastapi.testclient import TestClient
+       8  
+       9  from app.config import Settings
+      10 +from app.llm import Completed, TextDelta                       
+      11  from app.main import create_app
+      12  
+      13  
+
+⏺ Write(tests/test_rag.py)
+  ⎿  Wrote 287 lines to tests/test_rag.py
+       1 import asyncio
+       2 import json
+       3
+       4 import anthropic
+       5 import httpx
+       6 import pytest
+       7
+       8 from app.llm import ClaudeLLM, Completed, LLMError, TextDelta
+       9 from app.rag import (
+      10     NOT_FOUND_MESSAGE,
+     … +324 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 107 tests pass. Next is a live test against the real Claude API, so I'll
+  check whether any credentials are available without printing them:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ No API credentials are available yet, so I can't test a real Claude call. I'll
+  still verify the live server end-to-end with the real embedding model to
+  confirm retrieval works and that a missing key produces a clean error.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The pipeline works end to end — retrieval succeeded, but the Claude call
+  failed due to insufficient credits on the API key's account (a billing issue,
+  not a code bug). I'll clean up the error handling so users see just the actual
+  message instead of the raw SDK error dict.
+
+⏺ Update(app/llm.py)
+  ⎿  Added 1 line, removed 1 line
+      66          except anthropic.RateLimitError as exc:
+      67              raise LLMError("The LLM is rate limited. Please ret
+          ry shortly.") from exc
+      68          except anthropic.BadRequestError as exc:
+      69 -            raise LLMError(f"The LLM rejected the request: {exc
+         -.message}") from exc                                           
+      69 +            raise LLMError(f"The LLM rejected the request: {_ap
+         +i_error_message(exc)}") from exc                               
+      70          except anthropic.APIStatusError as exc:
+      71              raise LLMError(f"The LLM service returned an error 
+          ({exc.status_code}).") from exc
+      72          except anthropic.APIConnectionError as exc:
+
+⏺ Update(app/llm.py)
+  ⎿  Added 10 lines
+      33      def stream(self, system: str, messages: List[dict]) -> Asyn
+          cIterator[StreamEvent]: ...
+      34  
+      35  
+      36 +def _api_error_message(exc: anthropic.APIStatusError) -> str:  
+      37 +    """The API's human-readable message, without the SDK's stat
+         +us/dict wrapper."""                                            
+      38 +    body = exc.body                                            
+      39 +    if isinstance(body, dict):                                 
+      40 +        error = body.get("error")                              
+      41 +        if isinstance(error, dict) and isinstance(error.get("me
+         +ssage"), str):                                                 
+      42 +            return error["message"]                            
+      43 +    return exc.message                                         
+      44 +                                                               
+      45 +                                                               
+      46  class ClaudeLLM:
+      47      def __init__(self, settings: Settings):
+      48          self._settings = settings
+
+⏺ Update(tests/test_rag.py)
+  ⎿  Added 8 lines
+      274          (anthropic.RateLimitError("rl", response=httpx.Respons
+           e(429, request=_REQ), body=None), "rate limited"),
+      275          (anthropic.InternalServerError("x", response=httpx.Res
+           ponse(500, request=_REQ), body=None), "(500)"),
+      276          (anthropic.APIConnectionError(request=_REQ), "Could no
+           t reach"),
+      277 +        (                                                     
+      278 +            anthropic.BadRequestError(                        
+      279 +                "Error code: 400 - {...}",                    
+      280 +                response=httpx.Response(400, request=_REQ),   
+      281 +                body={"type": "error", "error": {"type": "inva
+          +lid_request_error", "message": "Credit balance too low."}},   
+      282 +            ),                                                
+      283 +            "rejected the request: Credit balance too low.",  
+      284 +        ),                                                    
+      285      ],
+      286  )
+      287  def test_claude_llm_maps_sdk_errors(make_settings, exc, expect
+           ed):
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 108 tests pass. I'll note the event format and the effort setting in the plan,
+  then commit. .env is gitignored, so your key can't be committed.
+
+⏺ Update(plan.md)
+  ⎿  Added 1 line, removed 1 line
+      13  | Area | Decision |
+      14  |---|---|
+      15  | Stack | Python + FastAPI |
+      16 -| LLM | Claude, default `claude-sonnet-5`, configurable via `LL
+         -M_MODEL` env var |                                             
+      16 +| LLM | Claude, default `claude-sonnet-5`, configurable via `LL
+         +M_MODEL` env var; adaptive thinking with `LLM_EFFORT` (default 
+         +`medium`) |                                                    
+      17  | Embeddings | Local `sentence-transformers` model (`BAAI/bge-s
+          mall-en-v1.5`), no extra API key |
+      18  | Vector store | ChromaDB (embedded, persisted to disk), one co
+          llection per session |
+      19  | Ingestion | Synchronous, within the upload request, bounded b
+          y size limits |
+
+⏺ Update(plan.md)
+  ⎿  Added 4 lines
+       99  | `POST` | `/api/sessions/{id}/query` | Ask a question (+ rece
+           nt history); streams answer + citations (SSE) |
+      100  | `GET` | `/api/health` | Health / config check |
+      101  
+      102 +The query stream emits Server-Sent Events: `sources` (numbered
+          + retrieved chunks), repeated `delta` (answer text), then `done
+          +` (stop reason, cited source ids, token usage) or `error` (use
+          +r-safe message).                                              
+      103 +                                                              
+      104 +Follow-up questions: the previous user question is prefixed to
+          + the retrieval query so references like "what about the second
+          + one?" still retrieve the right chunks.                       
+      105 +                                                              
+      106  ## Project layout
+      107  
+      108  ```
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Milestone 5 is built and committed (20ee596), and all 108 tests pass. It
+  hasn't produced a real answer from Claude yet: the Anthropic account behind
+  your API key has no credits, so the one live call was rejected.
+
+  What was added:
+  - Claude calls in app/llm.py stream the answer from the model set in LLM_MODEL
+    (default claude-sonnet-5). Thinking stays on, and a new setting LLM_EFFORT
+    (default medium) trades speed against thoroughness. I raised LLM_MAX_TOKENS
+    to 16000 because thinking tokens count towards that cap.
+  - Error handling: errors from the Anthropic SDK become short messages that are
+    safe to show users, such as an invalid key, an unknown model, rate limiting
+    or a network failure.
+  - Grounding in app/rag.py:
+    - Rules: the system prompt tells Claude to answer only from the retrieved
+      passages and to cite them as [1], [2].
+    - No answer: when the documents don't cover the question, Claude replies
+      with a fixed "couldn't find" message.
+    - Prompt injection: text inside the documents is treated as reference
+      material, not instructions.
+    - Passage format: passages are sent to Claude numbered, with the file name
+      and page.
+  - Endpoint: POST /api/sessions/{id}/query streams events to the browser:
+    a. sources: the retrieved passages.
+    b. delta: pieces of the answer as they arrive.
+    c. done (with the source numbers actually cited and token usage) or error.
+
+    It rejects empty or overlong questions, and returns 409 if the session has
+    no documents yet.
+  - Follow-up questions:
+    - History: the browser sends recent turns, trimmed to the last 6 pairs.
+    - Retrieval: the previous question is added to the search, so "what about
+      the second one?" still finds the right passages.
+  - Tests: there are 30 new tests covering prompt building, history trimming,
+    the event stream, keeping sessions separate, the top-k limit, input checks
+    and how each error type is reported.
+
+  Live check: on the running server, retrieval with the real embedding model
+  found the right passage (score 0.78). The Claude call was then rejected by the
+  API with "Your credit balance is too low", and the rejection came back as a
+  clean error event.
+
+  To finish the live check, add credits to that Anthropic account (Console →
+  Plans & Billing) or put a different key in .env. I'll run the real test as
+  soon as that's done.
+
+  Should I build milestone 6, the web UI, in the meantime? It doesn't need
+  Claude to be working.
+
+❯ <ide_opened_file>The user opened the file /Users/ashishsahu/Documents/SDE-Int
+  erview-Preparation-2026/hrclabs/hrclabsrag/.env in the IDE. This may or may
+  not be related to the current task.</ide_opened_file>
+
+❯ add instructions to set-up in read me
+
+⏺ Write(README.md)
+  ⎿  Added 127 lines, removed 1 line
+        1 -# hrclabsrag                                                  
+        1   No newline at end of file
+        2 +# hrclabsrag — RAG Generator                                  
+        3 +                                                              
+        4 +Upload PDF or TXT documents at runtime and ask questions about
+          + them. Answers are generated by Claude from the uploaded docum
+          +ents only, with citations to the source file and page. Each se
+          +ssion has its own document set and chat, so the app works with
+          + any set of documents without code changes.                   
+        5 +                                                              
+        6 +See [plan.md](plan.md) for the scope, constraints and design. 
+        7 +                                                              
+        8 +## Prerequisites                                              
+        9 +                                                              
+       10 +- **Python 3.9 or newer**. Check with `python3 --version`.    
+       11 +- **An Anthropic API key** from [console.anthropic.com](https:
+          +//console.anthropic.com/). The account needs available credits
+          +, because a key on an account with no credits is rejected with
+          + "credit balance is too low".                                 
+       12 +- About **1 GB of disk space** for dependencies (PyTorch is pu
+          +lled in by `sentence-transformers`) plus about 130 MB for the 
+          +embedding model, which is downloaded on first run.            
+       13 +                                                              
+       14 +## Setup                                                      
+       15 +                                                              
+       16 +```bash                                                       
+       17 +# 1. Clone and enter the repository                           
+       18 +git clone <repo-url> hrclabsrag                               
+       19 +cd hrclabsrag                                                 
+       20 +                                                              
+       21 +# 2. Create and activate a virtual environment                
+       22 +python3 -m venv .venv                                         
+       23 +source .venv/bin/activate          # Windows: .venv\Scripts\ac
+          +tivate                                                        
+       24 +                                                              
+       25 +# 3. Install dependencies                                     
+       26 +pip install --upgrade pip                                     
+       27 +pip install -r requirements.txt                               
+       28 +                                                              
+       29 +# 4. Create your config file and add your API key             
+       30 +cp .env.example .env                                          
+       31 +```                                                           
+       32 +                                                              
+       33 +Open `.env` and set your key:                                 
+       34 +                                                              
+       35 +```dotenv                                                     
+       36 +ANTHROPIC_API_KEY=sk-ant-...                                  
+       37 +```                                                           
+       38 +                                                              
+       39 +`.env` is gitignored, so your key is never committed. You can 
+          +instead export `ANTHROPIC_API_KEY` in your shell; environment 
+          +variables override `.env`.                                    
+       40 +                                                              
+       41 +## Run                                                        
+       42 +                                                              
+       43 +```bash                                                       
+       44 +uvicorn app.main:create_app --factory --reload                
+       45 +```                                                           
+       46 +                                                              
+       47 +- Web UI: <http://localhost:8000>                             
+       48 +- Interactive API docs: <http://localhost:8000/docs>          
+       49 +- Health check: <http://localhost:8000/api/health>. `"llm_conf
+          +igured": true` confirms the API key was picked up.            
+       50 +                                                              
+       51 +On the first start, the embedding model (`BAAI/bge-small-en-v1
+          +.5`) downloads from Hugging Face in the background. Later star
+          +ts load it from the local cache.                              
+       52 +                                                              
+       53 +App data (session registry and vector index) is stored in `./d
+          +ata/`. Delete that folder to reset everything.                
+       54 +                                                              
+       55 +## Using the API                                              
+       56 +                                                              
+       57 +Every document set belongs to a session. Create a session, upl
+          +oad files, then ask questions:                                
+       58 +                                                              
+       59 +```bash                                                       
+       60 +# Create a session                                            
+       61 +SID=$(curl -s -X POST localhost:8000/api/sessions | python3 -c
+          + "import sys,json; print(json.load(sys.stdin)['session_id'])")
+       62 +                                                              
+       63 +# Upload one or more PDF/TXT files                            
+       64 +curl -F "files=@handbook.pdf" -F "files=@faq.txt" localhost:80
+          +00/api/sessions/$SID/documents                                
+       65 +                                                              
+       66 +# List documents in the session                               
+       67 +curl localhost:8000/api/sessions/$SID/documents               
+       68 +                                                              
+       69 +# Ask a question (answer streams back as Server-Sent Events)  
+       70 +curl -N -X POST localhost:8000/api/sessions/$SID/query \      
+       71 +  -H 'content-type: application/json' \                       
+       72 +  -d '{"question": "How many days of annual leave do employees
+          + get?"}'                                                      
+       73 +                                                              
+       74 +# Delete the session and its documents                        
+       75 +curl -X DELETE localhost:8000/api/sessions/$SID               
+       76 +```                                                           
+       77 +                                                              
+       78 +The query stream emits these events:                          
+       79 +                                                              
+       80 +| Event | Data |                                              
+       81 +|---|---|                                                     
+       82 +| `sources` | Numbered retrieved passages: `id`, `filename`, `
+          +page`, `score`, `snippet` |                                   
+       83 +| `delta` | A piece of answer text (repeated) |               
+       84 +| `done` | `stop_reason`, `cited` (source ids used in the answ
+          +er), token `usage` |                                          
+       85 +| `error` | A user-safe `message` (sent instead of `done`) |  
+       86 +                                                              
+       87 +For follow-up questions, send earlier turns as `"history": [{"
+          +role": "user", "content": "..."}, {"role": "assistant", "conte
+          +nt": "..."}]`.                                                
+       88 +                                                              
+       89 +## Configuration                                              
+       90 +                                                              
+       91 +All settings are read from `.env` or the environment. Defaults
+          + are in [.env.example](.env.example).                         
+       92 +                                                              
+       93 +| Variable | Default | Purpose |                              
+       94 +|---|---|---|                                                 
+       95 +| `ANTHROPIC_API_KEY` | (none) | Required for answering questi
+          +ons |                                                         
+       96 +| `LLM_MODEL` | `claude-sonnet-5` | Any Claude model ID, e.g. 
+          +`claude-haiku-4-5` for faster, cheaper answers |              
+       97 +| `LLM_EFFORT` | `medium` | `low` / `medium` / `high` / `xhigh
+          +` / `max`. Higher is more thorough but slower |               
+       98 +| `LLM_MAX_TOKENS` | `16000` | Output cap per answer, includin
+          +g thinking |                                                  
+       99 +| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Local sentenc
+          +e-transformers model |                                        
+      100 +| `DATA_DIR` | `./data` | Where sessions and vectors are store
+          +d |                                                           
+      101 +| `MAX_FILE_SIZE_MB` | `10` | Per-file size limit |           
+      102 +| `MAX_PDF_PAGES` | `200` | Per-PDF page limit |              
+      103 +| `MAX_FILES_PER_UPLOAD` | `5` | Files per upload request |   
+      104 +| `MAX_DOCS_PER_SESSION` | `20` | Documents per session |     
+      105 +| `SESSION_TTL_HOURS` | `24` | Idle sessions are deleted after
+          + this long |                                                  
+      106 +| `MAX_HISTORY_TURNS` | `6` | Previous Q&A pairs sent to the m
+          +odel |                                                        
+      107 +| `MAX_QUESTION_CHARS` | `2000` | Question length limit |     
+      108 +| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `800` / `150` | Chunking, i
+          +n characters |                                                
+      109 +| `TOP_K` | `5` | Passages retrieved per question |           
+      110 +                                                              
+      111 +Changing `EMBEDDING_MODEL` or the chunking settings only affec
+          +ts documents uploaded afterwards. Delete `./data/` to re-index
+          + from scratch.                                                
+      112 +                                                              
+      113 +## Tests                                                      
+      114 +                                                              
+      115 +```bash                                                       
+      116 +pytest                # fast suite, no network or API key need
+          +ed (Claude and embeddings are faked)                          
+      117 +pytest -m slow        # also checks retrieval with the real em
+          +bedding model (downloads it once)                             
+      118 +```                                                           
+      119 +                                                              
+      120 +## Troubleshooting                                            
+      121 +                                                              
+      122 +| Symptom | Fix |                                             
+      123 +|---|---|                                                     
+      124 +| `The Anthropic API key is missing or invalid.` | Set `ANTHRO
+          +PIC_API_KEY` in `.env` and restart the server |               
+      125 +| `Your credit balance is too low...` | Add credits in the Ant
+          +hropic Console under Plans & Billing, or use a key from an acc
+          +ount with credits |                                           
+      126 +| `Model '...' was not found.` | Check `LLM_MODEL` is a valid 
+          +Claude model ID |                                             
+      127 +| First upload is slow | The embedding model is still download
+          +ing or loading on first run |                                 
+      128 +| `Address already in use` | Run on another port: `uvicorn app
+          +.main:create_app --factory --port 8001` |                     
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Written for: reviewers and anyone setting up the repo from scratch.
+
+  I've added setup instructions to README.md and committed them (16a5565). They
+  cover:
+  - Prerequisites: Python 3.9 or newer, an Anthropic API key on an account with
+    credits, and disk space for PyTorch and the embedding model.
+  - Setup: creating the virtual environment, installing dependencies, copying
+    .env.example to .env and adding the key.
+  - Running the server: the uvicorn ... --factory command, the web UI, API docs
+    and health-check URLs, and a note that the embedding model downloads on
+    first start.
+  - Using the API: curl commands for creating a session, uploading, listing,
+    asking a question and deleting, plus the list of streamed event types.
+  - Configuration: a table of every setting in .env with its default.
+  - Tests: the fast suite, and pytest -m slow for the real-model check.
+  - Troubleshooting: a missing or invalid key, the "credit balance too low"
+    error you hit, an unknown model name, and a port already in use.
+
+  The README points to the web UI at localhost:8000, but for now that page is
+  still the placeholder; the real UI comes in milestone 6. The design notes and
+  limitations section is still to come in milestone 8.
