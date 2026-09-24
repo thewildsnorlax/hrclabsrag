@@ -1,0 +1,13 @@
+Problem Statement:
+
+Build a RAG Generator that:
+• Accepts documents at runtime
+• Creates a RAG application over those documents
+• Allows users to ask questions and receive grounded answers
+• Works with different document sets without code changes
+You may choose the architecture, stack, models, tools and approach.
+
+Submission Instructions: Your GitHub repository must include:
+The complete working source code.
+A README with setup and execution instructions.
+Complete AI agent transcripts used during the development of the solution (e.g., Codex or Claude Code transcripts exported using /export).
