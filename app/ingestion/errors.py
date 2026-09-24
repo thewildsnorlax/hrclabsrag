@@ -30,6 +30,10 @@ class SessionDocumentLimit(IngestionError):
     status_code = 409
 
 
+class DuplicateDocument(IngestionError):
+    status_code = 409
+
+
 class UnreadableDocument(IngestionError):
     """Corrupt, encrypted, or has no extractable text (e.g. a scanned PDF)."""
 

@@ -1,16 +1,18 @@
 """Ingestion pipeline: validate -> load -> chunk."""
 
+import hashlib
 from dataclasses import dataclass
 from typing import List
 
 from app.config import Settings
 from app.ingestion.chunker import Chunk, chunk_document
-from app.ingestion.errors import IngestionError
+from app.ingestion.errors import DuplicateDocument, IngestionError
 from app.ingestion.loaders import LoadedDocument, load_document
 from app.ingestion.validation import clean_filename, validate_batch, validate_file
 
 __all__ = [
     "Chunk",
+    "DuplicateDocument",
     "IngestionError",
     "ProcessedDocument",
     "process_file",
@@ -23,6 +25,7 @@ class ProcessedDocument:
     document: LoadedDocument
     chunks: List[Chunk]
     size_bytes: int
+    sha256: str
 
 
 def process_file(filename: str, data: bytes, settings: Settings) -> ProcessedDocument:
@@ -31,4 +34,9 @@ def process_file(filename: str, data: bytes, settings: Settings) -> ProcessedDoc
     file_type = validate_file(filename, data, settings)
     document = load_document(filename, file_type, data, settings.max_pdf_pages)
     chunks = chunk_document(document, settings.chunk_size, settings.chunk_overlap)
-    return ProcessedDocument(document=document, chunks=chunks, size_bytes=len(data))
+    return ProcessedDocument(
+        document=document,
+        chunks=chunks,
+        size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )

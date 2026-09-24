@@ -1,8 +1,9 @@
-"""Session registry backed by SQLite, so sessions survive server restarts.
+"""Session and document registry backed by SQLite, so both survive server restarts.
 
 A session is the unit of isolation: it owns one document set and one chat.
 Sessions expire after `ttl` of inactivity; every successful lookup refreshes
-the activity timestamp.
+the activity timestamp. Chunk vectors live in the vector store; this registry
+holds the per-document metadata used for listing and limit checks.
 """
 
 import sqlite3
@@ -32,6 +33,35 @@ class Session:
         }
 
 
+@dataclass(frozen=True)
+class DocumentRecord:
+    id: str
+    session_id: str
+    filename: str
+    file_type: str
+    page_count: Optional[int]
+    chunk_count: int
+    size_bytes: int
+    sha256: str
+    created_at: float
+
+    def to_dict(self) -> dict:
+        return {
+            "document_id": self.id,
+            "filename": self.filename,
+            "file_type": self.file_type,
+            "page_count": self.page_count,
+            "chunk_count": self.chunk_count,
+            "size_bytes": self.size_bytes,
+            "created_at": _iso(self.created_at),
+        }
+
+
+_DOC_COLUMNS = (
+    "id, session_id, filename, file_type, page_count, chunk_count, size_bytes, sha256, created_at"
+)
+
+
 def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
@@ -50,6 +80,22 @@ class SessionStore:
                        created_at REAL NOT NULL,
                        last_active_at REAL NOT NULL
                    )"""
+            )
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS documents (
+                       id TEXT PRIMARY KEY,
+                       session_id TEXT NOT NULL,
+                       filename TEXT NOT NULL,
+                       file_type TEXT NOT NULL,
+                       page_count INTEGER,
+                       chunk_count INTEGER NOT NULL,
+                       size_bytes INTEGER NOT NULL,
+                       sha256 TEXT NOT NULL,
+                       created_at REAL NOT NULL
+                   )"""
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_session ON documents (session_id)"
             )
 
     @property
@@ -89,6 +135,7 @@ class SessionStore:
     def delete(self, session_id: str) -> bool:
         with self._lock, self._conn:
             cur = self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            self._conn.execute("DELETE FROM documents WHERE session_id = ?", (session_id,))
         return cur.rowcount > 0
 
     def purge_expired(self) -> List[str]:
@@ -101,8 +148,62 @@ class SessionStore:
                     "SELECT id FROM sessions WHERE last_active_at < ?", (cutoff,)
                 )
             ]
-            self._conn.executemany("DELETE FROM sessions WHERE id = ?", [(i,) for i in ids])
+            params = [(i,) for i in ids]
+            self._conn.executemany("DELETE FROM sessions WHERE id = ?", params)
+            self._conn.executemany("DELETE FROM documents WHERE session_id = ?", params)
         return ids
+
+    # --- documents ---------------------------------------------------------
+
+    def add_document(
+        self,
+        session_id: str,
+        filename: str,
+        file_type: str,
+        page_count: Optional[int],
+        chunk_count: int,
+        size_bytes: int,
+        sha256: str,
+    ) -> DocumentRecord:
+        record = DocumentRecord(
+            id=uuid.uuid4().hex,
+            session_id=session_id,
+            filename=filename,
+            file_type=file_type,
+            page_count=page_count,
+            chunk_count=chunk_count,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            created_at=self._clock(),
+        )
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"INSERT INTO documents ({_DOC_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    record.id,
+                    record.session_id,
+                    record.filename,
+                    record.file_type,
+                    record.page_count,
+                    record.chunk_count,
+                    record.size_bytes,
+                    record.sha256,
+                    record.created_at,
+                ),
+            )
+        return record
+
+    def delete_document(self, document_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+
+    def list_documents(self, session_id: str) -> List[DocumentRecord]:
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_DOC_COLUMNS} FROM documents WHERE session_id = ? ORDER BY created_at, rowid",
+                (session_id,),
+            ).fetchall()
+        return [DocumentRecord(*row) for row in rows]
 
     def close(self) -> None:
         self._conn.close()

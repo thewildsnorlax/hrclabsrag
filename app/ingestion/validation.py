@@ -48,8 +48,9 @@ def validate_file(filename: str, data: bytes, settings: Settings) -> str:
     if len(data) == 0:
         raise UnsupportedFileType("File is empty.", filename)
     if len(data) > settings.max_file_size_bytes:
+        # The API reads at most limit+1 bytes, so the true size is unknown here.
         raise FileTooLarge(
-            f"File is {len(data) / 1024 / 1024:.1f} MB; the limit is {settings.max_file_size_mb} MB.",
+            f"File exceeds the size limit; the limit is {settings.max_file_size_mb} MB.",
             filename,
         )
     # Check content matches the extension, so e.g. a renamed binary isn't accepted.
