@@ -88,6 +88,7 @@ FastAPI ──► Ingestion (sync): validate limits → parse (pypdf / text) →
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/sessions` | Create a session; returns `session_id` |
+| `GET` | `/api/sessions/{id}` | Check a session is still valid (used to resume after a page refresh) |
 | `DELETE` | `/api/sessions/{id}` | Delete a session and its documents |
 | `POST` | `/api/sessions/{id}/documents` | Upload files (multipart) and index them synchronously |
 | `GET` | `/api/sessions/{id}/documents` | List indexed documents |

@@ -1,17 +1,10 @@
 import pytest
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.main import create_app
 
 
-def make_client(**overrides) -> TestClient:
-    settings = Settings(_env_file=None, **overrides)
-    return TestClient(create_app(settings))
-
-
-def test_health_reports_config_without_leaking_key():
+def test_health_reports_config_without_leaking_key(make_client):
     client = make_client(anthropic_api_key="sk-secret", llm_model="claude-haiku-4-5")
     resp = client.get("/api/health")
     assert resp.status_code == 200
@@ -22,7 +15,7 @@ def test_health_reports_config_without_leaking_key():
     assert "sk-secret" not in resp.text
 
 
-def test_health_flags_missing_api_key():
+def test_health_flags_missing_api_key(make_client):
     body = make_client(anthropic_api_key="").get("/api/health").json()
     assert body["llm_configured"] is False
 
@@ -36,7 +29,7 @@ def test_overlap_must_be_smaller_than_chunk_size():
         Settings(_env_file=None, chunk_size=100, chunk_overlap=100)
 
 
-def test_root_serves_ui():
+def test_root_serves_ui(make_client):
     resp = make_client().get("/")
     assert resp.status_code == 200
     assert "RAG Generator" in resp.text
