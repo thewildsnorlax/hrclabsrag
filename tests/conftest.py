@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.llm import Completed, TextDelta
 from app.main import create_app
 
 
@@ -29,6 +30,22 @@ class FakeEmbedder:
         return self._embed(text)
 
 
+class FakeLLM:
+    """Records each call and replays a scripted list of StreamEvents (or raises)."""
+
+    def __init__(self, events=None, error: Exception = None):
+        self.events = events if events is not None else [TextDelta("Answer [1]."), Completed("end_turn")]
+        self.error = error
+        self.calls = []
+
+    async def stream(self, system, messages):
+        self.calls.append({"system": system, "messages": messages})
+        for event in self.events:
+            yield event
+        if self.error:
+            raise self.error
+
+
 @pytest.fixture
 def make_settings(tmp_path):
     def _make(**overrides) -> Settings:
@@ -42,8 +59,10 @@ def make_settings(tmp_path):
 def make_client(make_settings):
     clients = []
 
-    def _make(embedder=None, **overrides) -> TestClient:
-        app = create_app(make_settings(**overrides), embedder=embedder or FakeEmbedder())
+    def _make(embedder=None, llm=None, **overrides) -> TestClient:
+        app = create_app(
+            make_settings(**overrides), embedder=embedder or FakeEmbedder(), llm=llm or FakeLLM()
+        )
         client = TestClient(app)
         client.__enter__()  # run lifespan (startup purge, background task)
         clients.append(client)

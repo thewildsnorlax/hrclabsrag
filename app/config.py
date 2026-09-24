@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,7 +14,9 @@ class Settings(BaseSettings):
     # LLM
     anthropic_api_key: str = ""
     llm_model: str = "claude-sonnet-5"
-    llm_max_tokens: int = Field(1024, gt=0)
+    # Adaptive thinking tokens count toward max_tokens, so keep headroom.
+    llm_max_tokens: int = Field(16000, gt=0)
+    llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
 
     # Embeddings / storage
     embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -28,6 +31,7 @@ class Settings(BaseSettings):
     # Sessions / chat
     session_ttl_hours: int = Field(24, gt=0)
     max_history_turns: int = Field(6, ge=0)
+    max_question_chars: int = Field(2000, gt=0)
 
     # Retrieval
     chunk_size: int = Field(800, gt=0)

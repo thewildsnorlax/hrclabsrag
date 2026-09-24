@@ -13,7 +13,7 @@ Build a RAG generator that:
 | Area | Decision |
 |---|---|
 | Stack | Python + FastAPI |
-| LLM | Claude, default `claude-sonnet-5`, configurable via `LLM_MODEL` env var |
+| LLM | Claude, default `claude-sonnet-5`, configurable via `LLM_MODEL` env var; adaptive thinking with `LLM_EFFORT` (default `medium`) |
 | Embeddings | Local `sentence-transformers` model (`BAAI/bge-small-en-v1.5`), no extra API key |
 | Vector store | ChromaDB (embedded, persisted to disk), one collection per session |
 | Ingestion | Synchronous, within the upload request, bounded by size limits |
@@ -98,6 +98,10 @@ FastAPI ──► Ingestion (sync): validate limits → parse (pypdf / text) →
 | `GET` | `/api/sessions/{id}/documents` | List indexed documents |
 | `POST` | `/api/sessions/{id}/query` | Ask a question (+ recent history); streams answer + citations (SSE) |
 | `GET` | `/api/health` | Health / config check |
+
+The query stream emits Server-Sent Events: `sources` (numbered retrieved chunks), repeated `delta` (answer text), then `done` (stop reason, cited source ids, token usage) or `error` (user-safe message).
+
+Follow-up questions: the previous user question is prefixed to the retrieval query so references like "what about the second one?" still retrieve the right chunks.
 
 ## Project layout
 

@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
 from app.documents import DocumentService
 from app.ingestion import IngestionError
+from app.llm import AnswerLLM, ClaudeLLM
+from app.rag import QueryRequest, RAGPipeline
 from app.sessions import Session, SessionStore
 from app.store import Embedder, SentenceTransformerEmbedder, VectorStore
 
@@ -26,7 +28,11 @@ PURGE_INTERVAL_SECONDS = 3600
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
-def create_app(settings: Optional[Settings] = None, embedder: Optional[Embedder] = None) -> FastAPI:
+def create_app(
+    settings: Optional[Settings] = None,
+    embedder: Optional[Embedder] = None,
+    llm: Optional[AnswerLLM] = None,
+) -> FastAPI:
     settings = settings or get_settings()
     embedder = embedder or SentenceTransformerEmbedder(settings.embedding_model)
     sessions = SessionStore(
@@ -34,6 +40,7 @@ def create_app(settings: Optional[Settings] = None, embedder: Optional[Embedder]
     )
     store = VectorStore(settings.data_dir / "chroma", embedder)
     documents = DocumentService(settings, sessions, store)
+    rag = RAGPipeline(settings, store, llm or ClaudeLLM(settings))
 
     def purge_expired_sessions() -> List[str]:
         expired = sessions.purge_expired()
@@ -146,6 +153,26 @@ def create_app(settings: Optional[Settings] = None, embedder: Optional[Embedder]
     @app.get("/api/sessions/{session_id}/documents")
     def list_documents(session: Session = Depends(current_session)) -> dict:
         return {"documents": [r.to_dict() for r in sessions.list_documents(session.id)]}
+
+    @app.post("/api/sessions/{session_id}/query")
+    async def query(body: QueryRequest, session: Session = Depends(current_session)) -> StreamingResponse:
+        question = body.question.strip()
+        if not question:
+            raise HTTPException(422, "Question must not be empty.")
+        if len(question) > settings.max_question_chars:
+            raise HTTPException(
+                422,
+                f"Question is too long; the limit is {settings.max_question_chars} characters.",
+            )
+        if not await asyncio.to_thread(sessions.list_documents, session.id):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Upload documents before asking questions.")
+
+        chunks = await rag.retrieve(session.id, question, body.history)
+        return StreamingResponse(
+            rag.answer_stream(question, body.history, chunks),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # Mounted last so /api routes take precedence.
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
